@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { AuditReport } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
@@ -8,6 +9,8 @@ import { CategoryBars } from "./category-bars";
 import { CheckResultRow } from "./check-result-row";
 import { PageList } from "./page-list";
 import { ExternalLink, Globe2 } from "lucide-react";
+import { RegenerateCta } from "./regenerate-cta";
+import { RegenerateWizard } from "./regenerate-wizard";
 
 const INDUSTRY_LABEL: Record<string, string> = {
   restaurant: "Restaurant",
@@ -19,6 +22,7 @@ const INDUSTRY_LABEL: Record<string, string> = {
 };
 
 export function AuditReportView({ report }: { report: AuditReport }) {
+  const [regenOpen, setRegenOpen] = useState(false);
   return (
     <div className="flex flex-col gap-6">
       <Card>
@@ -81,6 +85,8 @@ export function AuditReportView({ report }: { report: AuditReport }) {
         </Card>
       </div>
 
+      <RegenerateCta onClick={() => setRegenOpen(true)} />
+
       <Card>
         <CardHeader>
           <CardTitle>Top recommendations</CardTitle>
@@ -112,6 +118,8 @@ export function AuditReportView({ report }: { report: AuditReport }) {
           </CardContent>
         </Card>
       )}
+
+      <RegenerateWizard report={report} open={regenOpen} onClose={() => setRegenOpen(false)} />
     </div>
   );
 }

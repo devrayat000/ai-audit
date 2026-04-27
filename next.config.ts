@@ -10,6 +10,9 @@ const nextConfig: NextConfig = {
     "robots-parser",
     "sitemapper",
     "text-readability",
+    "jszip",
+    "franc-min",
+    "rtl-detect",
   ],
 };
 
