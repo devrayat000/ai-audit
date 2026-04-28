@@ -9,17 +9,22 @@ interface Props {
   acknowledged: boolean;
 }
 
-function base64ToBlob(b64: string): Blob {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new Blob([bytes], { type: "application/zip" });
+async function base64ToBlob(b64: string): Promise<Blob> {
+  // 1. Remove any whitespace or newlines that might have been added during transport
+  const cleanB64 = b64.replace(/\s/g, "");
+
+  // 2. Ensure it doesn't already have the prefix before adding it
+  const dataUri = cleanB64.startsWith("data:")
+    ? cleanB64
+    : `data:application/zip;base64,${cleanB64}`;
+  const response = await fetch(dataUri);
+  return await response.blob();
 }
 
 export function DeployButtons({ zipBase64, fileName, acknowledged }: Props) {
-  const download = () => {
+  const download = async () => {
     if (!acknowledged) return;
-    const blob = base64ToBlob(zipBase64);
+    const blob = await base64ToBlob(zipBase64);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -38,7 +43,9 @@ export function DeployButtons({ zipBase64, fileName, acknowledged }: Props) {
         variant="outline"
         size="lg"
         disabled={!acknowledged}
-        onClick={() => window.open("https://app.netlify.com/drop", "_blank", "noopener")}
+        onClick={async () => {
+          window.open("https://app.netlify.com/drop", "_blank", "noopener");
+        }}
       >
         <ExternalLink className="size-4" />
         Open Netlify Drop

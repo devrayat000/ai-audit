@@ -10,22 +10,40 @@ import { inlineStylesheets } from "./static-surgery/css-inliner";
 import { bundleZip } from "./static-surgery/bundler";
 import { buildLlmsTxt, buildLlmsFullTxt } from "./files/llms-txt-generator";
 import { buildRobotsTxt } from "./files/robots-txt-generator";
-import { buildSitemap, buildSitemapWithAlternates } from "./files/sitemap-generator";
+import {
+  buildSitemap,
+  buildSitemapWithAlternates,
+} from "./files/sitemap-generator";
 import { detectLanguageFromHtml } from "./i18n/detector";
 import { classifyTextNodes } from "./i18n/classifier";
-import { translateClassified, InMemoryTranslationCache } from "./i18n/translator";
+import {
+  translateClassified,
+  InMemoryTranslationCache,
+} from "./i18n/translator";
 import { applyTranslations } from "./i18n/applier";
 import { applyDirection } from "./i18n/direction-handler";
-import { detectExpansionRisks, flagPreservationFailures, flagLegalNodes } from "./i18n/expansion-checker";
+import {
+  detectExpansionRisks,
+  flagPreservationFailures,
+  flagLegalNodes,
+} from "./i18n/expansion-checker";
 import { pickFontPair, buildFontHeadHtml } from "./i18n/font-mapper";
-import { injectHreflang, buildAlternatesForPair } from "./i18n/hreflang-builder";
+import {
+  injectHreflang,
+  buildAlternatesForPair,
+} from "./i18n/hreflang-builder";
 import { scaffoldNextProject } from "./next-project/scaffolder";
 import { extractRepeatingComponents } from "./next-project/component-extractor";
 import { convertPage } from "./next-project/page-converter";
 import { diffPage } from "./diff";
 import type { CopyLlm } from "./static-surgery/copy-rewriter";
 import type { AltTextLlm } from "./static-surgery/alt-text-generator";
-import type { RegenFile, RegenInput, RegenResult, TranslationWarning } from "./types";
+import type {
+  RegenFile,
+  RegenInput,
+  RegenResult,
+  TranslationWarning,
+} from "./types";
 
 interface ClaudeClient {
   messages: {
@@ -65,7 +83,10 @@ function makeCopyLlm(client: ClaudeClient | null): CopyLlm | null {
           system: sys,
           messages: [{ role: "user", content: user }],
         });
-        const txt = res.content.map((c) => c.text ?? "").join("").trim();
+        const txt = res.content
+          .map((c) => c.text ?? "")
+          .join("")
+          .trim();
         if (!txt) return null;
         return txt.replace(/^"|"$/g, "");
       } catch {
@@ -83,13 +104,18 @@ function makeCopyLlm(client: ClaudeClient | null): CopyLlm | null {
           system: sys,
           messages: [{ role: "user", content: user }],
         });
-        const txt = res.content.map((c) => c.text ?? "").join("").trim();
+        const txt = res.content
+          .map((c) => c.text ?? "")
+          .join("")
+          .trim();
         const start = txt.indexOf("[");
         const end = txt.lastIndexOf("]");
         if (start < 0 || end < 0) return [];
         const parsed = JSON.parse(txt.slice(start, end + 1));
         if (!Array.isArray(parsed)) return [];
-        return parsed.filter((x) => x && typeof x.q === "string" && typeof x.a === "string");
+        return parsed.filter(
+          (x) => x && typeof x.q === "string" && typeof x.a === "string",
+        );
       } catch {
         return [];
       }
@@ -111,7 +137,10 @@ function makeAltLlm(client: ClaudeClient | null): AltTextLlm | null {
           system: sys,
           messages: [{ role: "user", content: user }],
         });
-        const txt = res.content.map((c) => c.text ?? "").join("").trim();
+        const txt = res.content
+          .map((c) => c.text ?? "")
+          .join("")
+          .trim();
         return txt || null;
       } catch {
         return null;
@@ -127,7 +156,9 @@ async function loadAnthropic(apiKey: string): Promise<ClaudeClient | null> {
     const mod = (await import(/* webpackIgnore: true */ moduleName)) as {
       default?: { new (cfg: { apiKey: string }): ClaudeClient };
     } & { new (cfg: { apiKey: string }): ClaudeClient };
-    const Ctor = mod.default ?? (mod as unknown as { new (cfg: { apiKey: string }): ClaudeClient });
+    const Ctor =
+      mod.default ??
+      (mod as unknown as { new (cfg: { apiKey: string }): ClaudeClient });
     return new Ctor({ apiKey });
   } catch {
     return null;
@@ -141,7 +172,9 @@ export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
   const copyLlm = makeCopyLlm(claude);
   const altLlm = makeAltLlm(claude);
 
-  const fixSet = new Set(input.fixes.filter((f) => f.enabled).map((f) => f.analyzerKey));
+  const fixSet = new Set(
+    input.fixes.filter((f) => f.enabled).map((f) => f.analyzerKey),
+  );
   const notes: string[] = [];
   const fixesApplied = new Set<string>();
   const warnings: TranslationWarning[] = [];
@@ -149,11 +182,17 @@ export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
 
   // Fresh crawl (we don't persist audit data; on-the-fly).
   notes.push("Crawling site for regeneration…");
-  const { siteData, pages, errors, homepageScreenshot } = await crawlSite(input.rootUrl, {
-    industry: input.industry,
-    maxPages: Math.min(input.maxPages ?? 12, Number(process.env.MAX_REGEN_PAGES ?? 50)),
-    screenshotHomepage: true,
-  });
+  const { siteData, pages, errors, homepageScreenshot } = await crawlSite(
+    input.rootUrl,
+    {
+      industry: input.industry,
+      maxPages: Math.min(
+        input.maxPages ?? 12,
+        Number(process.env.MAX_REGEN_PAGES ?? 50),
+      ),
+      screenshotHomepage: true,
+    },
+  );
   notes.push(...errors.slice(0, 5).map((e) => `crawl: ${e}`));
 
   if (pages.length === 0) {
@@ -170,14 +209,20 @@ export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
   let homepagePreview = "";
 
   // For bilingual mode: target prefix for translated subtree
-  const langPrefix = translation && translation.mode === "bilingual" ? `/${translation.targetLanguage}` : "";
+  const langPrefix =
+    translation && translation.mode === "bilingual"
+      ? `/${translation.targetLanguage}`
+      : "";
 
   for (const page of pages) {
     const before = page.renderedHtml || page.rawHtml;
     let html = before;
 
     // Static-surgery pipeline (HTML mutations only — applies to source-language version)
-    if (input.strategy === "static-surgery" || input.strategy === "next-project") {
+    if (
+      input.strategy === "static-surgery" ||
+      input.strategy === "next-project"
+    ) {
       // 1. Heading fix
       if (fixSet.has("content-structure")) {
         const r = fixHeadingHierarchy(html);
@@ -206,13 +251,23 @@ export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
       }
       // 4. Copy rewrites + FAQ
       let faqQas: { q: string; a: string }[] = [];
-      if (fixSet.has("meta-tags") || fixSet.has("ai-content-patterns") || fixSet.has("readability")) {
+      if (
+        fixSet.has("meta-tags") ||
+        fixSet.has("ai-content-patterns") ||
+        fixSet.has("readability")
+      ) {
         const r = await rewriteCopy(html, {
           industry: input.industry,
           pageUrl: page.url,
           llm: copyLlm,
-          enableFaq: fixSet.has("content-structure") || fixSet.has("ai-content-patterns"),
-          facts: { name: facts.name, description: facts.description, city: facts.city },
+          enableFaq:
+            fixSet.has("content-structure") ||
+            fixSet.has("ai-content-patterns"),
+          facts: {
+            name: facts.name,
+            description: facts.description,
+            city: facts.city,
+          },
         });
         html = r.html;
         faqQas = r.faqQas;
@@ -247,11 +302,17 @@ export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
           inlineScripts: input.inlineAssets === true,
         });
         html = cssRes.html;
-        if (cssRes.inlinedCss > 0) notes.push(`Inlined ${cssRes.inlinedCss} stylesheet(s) on ${page.url}.`);
-        if (cssRes.inlinedJs > 0) notes.push(`Inlined ${cssRes.inlinedJs} script(s) on ${page.url}.`);
+        if (cssRes.inlinedCss > 0)
+          notes.push(
+            `Inlined ${cssRes.inlinedCss} stylesheet(s) on ${page.url}.`,
+          );
+        if (cssRes.inlinedJs > 0)
+          notes.push(`Inlined ${cssRes.inlinedJs} script(s) on ${page.url}.`);
         notes.push(...cssRes.notes);
       } catch (e) {
-        notes.push(`CSS inline failed for ${page.url}: ${e instanceof Error ? e.message : String(e)}`);
+        notes.push(
+          `CSS inline failed for ${page.url}: ${e instanceof Error ? e.message : String(e)}`,
+        );
       }
     }
 
@@ -260,7 +321,10 @@ export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
     // Translation pipeline
     let translatedHtml: string | null = null;
     if (translation && translation.mode !== "none") {
-      const { nodes } = classifyTextNodes(sourceVersionHtml, translation.glossary);
+      const { nodes } = classifyTextNodes(
+        sourceVersionHtml,
+        translation.glossary,
+      );
       const result = await translateClassified({
         client: claude,
         cfg: translation,
@@ -273,21 +337,40 @@ export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
         html: sourceVersionHtml,
         nodes,
         translations: new Map(
-          [...result.perNodeId.entries()].map(([k, v]) => [k, { translation: v.translation }])
+          [...result.perNodeId.entries()].map(([k, v]) => [
+            k,
+            { translation: v.translation },
+          ]),
         ),
         newLang: translation.targetLanguage,
       });
 
-      const directionRes = applyDirection(translated, translation.sourceDirection, translation.targetDirection);
+      const directionRes = applyDirection(
+        translated,
+        translation.sourceDirection,
+        translation.targetDirection,
+      );
       let dirHtml = directionRes.html;
       if (directionRes.warnings.length > 0) {
         directionRes.warnings.forEach((w) =>
-          warnings.push({ pageUrl: page.url, selector: "html", kind: "rtl-flip", message: w })
+          warnings.push({
+            pageUrl: page.url,
+            selector: "html",
+            kind: "rtl-flip",
+            message: w,
+          }),
         );
       }
 
-      const fontPair = pickFontPair(translation.sourceScript, translation.targetFontFamily);
-      const fontHead = buildFontHeadHtml(fontPair, translation.targetLanguage === "en" || /Latn/i.test(translation.sourceScript));
+      const fontPair = pickFontPair(
+        translation.sourceScript,
+        translation.targetFontFamily,
+      );
+      const fontHead = buildFontHeadHtml(
+        fontPair,
+        translation.targetLanguage === "en" ||
+          /Latn/i.test(translation.sourceScript),
+      );
       dirHtml = dirHtml.replace(/<head([^>]*)>/i, `<head$1>\n${fontHead}\n`);
 
       // Warnings
@@ -295,10 +378,17 @@ export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
         ...detectExpansionRisks({
           pageUrl: page.url,
           nodes,
-          translations: new Map([...result.perNodeId.entries()].map(([k, v]) => [k, { translation: v.translation }])),
-        })
+          translations: new Map(
+            [...result.perNodeId.entries()].map(([k, v]) => [
+              k,
+              { translation: v.translation },
+            ]),
+          ),
+        }),
       );
-      warnings.push(...flagPreservationFailures(page.url, nodes, result.perNodeId));
+      warnings.push(
+        ...flagPreservationFailures(page.url, nodes, result.perNodeId),
+      );
       warnings.push(...flagLegalNodes(page.url, nodes));
 
       translatedHtml = dirHtml;
@@ -312,7 +402,12 @@ export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
         const u = new URL(page.url);
         const targetUrl = `${u.origin}${langPrefix}${u.pathname}${u.search}`;
         const sourceUrl = page.url;
-        const alts = buildAlternatesForPair(sourceUrl, targetUrl, translation.sourceLanguage, translation.targetLanguage);
+        const alts = buildAlternatesForPair(
+          sourceUrl,
+          targetUrl,
+          translation.sourceLanguage,
+          translation.targetLanguage,
+        );
         finalSourceHtml = injectHreflang(sourceVersionHtml, alts);
         finalTargetHtml = injectHreflang(translatedHtml, alts);
       } catch {}
@@ -324,8 +419,15 @@ export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
 
     if (translation && translation.mode === "bilingual" && finalTargetHtml) {
       files.push({ path: baseZipPath, content: finalSourceHtml });
-      files.push({ path: prefixZipPath(baseZipPath, langPrefix), content: finalTargetHtml });
-    } else if (translation && (translation.mode === "literal" || translation.mode === "transcreate") && finalTargetHtml) {
+      files.push({
+        path: prefixZipPath(baseZipPath, langPrefix),
+        content: finalTargetHtml,
+      });
+    } else if (
+      translation &&
+      (translation.mode === "literal" || translation.mode === "transcreate") &&
+      finalTargetHtml
+    ) {
       files.push({ path: baseZipPath, content: finalTargetHtml });
     } else {
       files.push({ path: baseZipPath, content: finalSourceHtml });
@@ -348,8 +450,14 @@ export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
 
   const summary = { name: facts.name, description: facts.description };
   if (fixSet.has("llms-txt")) {
-    files.push({ path: "llms.txt", content: buildLlmsTxt(siteData, pages, summary) });
-    files.push({ path: "llms-full.txt", content: buildLlmsFullTxt(siteData, pages, summary) });
+    files.push({
+      path: "llms.txt",
+      content: buildLlmsTxt(siteData, pages, summary),
+    });
+    files.push({
+      path: "llms-full.txt",
+      content: buildLlmsFullTxt(siteData, pages, summary),
+    });
     fixesApplied.add("llms-txt");
   }
 
@@ -373,9 +481,15 @@ export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
           }
         })
         .filter((x): x is NonNullable<typeof x> => x !== null);
-      files.push({ path: "sitemap.xml", content: buildSitemapWithAlternates(pairs) });
+      files.push({
+        path: "sitemap.xml",
+        content: buildSitemapWithAlternates(pairs),
+      });
     } else {
-      files.push({ path: "sitemap.xml", content: buildSitemap(pages.map((p) => p.url)) });
+      files.push({
+        path: "sitemap.xml",
+        content: buildSitemap(pages.map((p) => p.url)),
+      });
     }
     fixesApplied.add("sitemap");
   }
@@ -383,20 +497,31 @@ export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
   // README + audit copy
   files.push({
     path: "README.md",
-    content: regenReadme(input, [...fixesApplied], notes.length, warnings.length, pages.length),
+    content: regenReadme(
+      input,
+      [...fixesApplied],
+      notes.length,
+      warnings.length,
+      pages.length,
+    ),
   });
 
   // Next.js project bonus output
   if (input.strategy === "next-project") {
     const scaffold = scaffoldNextProject({
-      projectName: facts.name?.toLowerCase().replace(/[^a-z0-9-]+/g, "-") || siteData.domain.replace(/[^a-z0-9-]+/g, "-"),
+      projectName:
+        facts.name?.toLowerCase().replace(/[^a-z0-9-]+/g, "-") ||
+        siteData.domain.replace(/[^a-z0-9-]+/g, "-"),
       rootUrl: input.rootUrl,
       industry: input.industry,
       description: facts.description || `${facts.name} site`,
     });
-    for (const f of scaffold) files.push({ path: `next-project/${f.path}`, content: f.content });
+    for (const f of scaffold)
+      files.push({ path: `next-project/${f.path}`, content: f.content });
 
-    const components = extractRepeatingComponents(pages.map((p) => ({ url: p.url, html: p.renderedHtml || p.rawHtml })));
+    const components = extractRepeatingComponents(
+      pages.map((p) => ({ url: p.url, html: p.renderedHtml || p.rawHtml })),
+    );
     components.forEach((c) => {
       files.push({
         path: `next-project/src/components/${c.name}.tsx`,
@@ -411,7 +536,11 @@ export function ${c.name}() {
     });
 
     for (const p of pages) {
-      const f = convertPage({ url: p.url, rootUrl: input.rootUrl, html: p.renderedHtml || p.rawHtml });
+      const f = convertPage({
+        url: p.url,
+        rootUrl: input.rootUrl,
+        html: p.renderedHtml || p.rawHtml,
+      });
       if (f) files.push({ path: `next-project/${f.path}`, content: f.content });
     }
   }
@@ -430,7 +559,7 @@ export function ${c.name}() {
     translationWarnings: warnings,
     totalSizeBytes: totalUncompressed,
     durationMs: Date.now() - t0,
-    zipBase64: Buffer.from(bytes).toString("base64"),
+    zipBase64: bytes.toBase64({ alphabet: "base64" }),
     notes,
   };
 }
@@ -447,7 +576,7 @@ function regenReadme(
   fixes: string[],
   noteCount: number,
   warnCount: number,
-  pageCount: number
+  pageCount: number,
 ): string {
   return `# AI-Audit Regenerated Site
 

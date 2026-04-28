@@ -2,32 +2,45 @@ import type { RegenFile } from "../types";
 
 interface JszipLike {
   file(path: string, content: string | Uint8Array): void;
-  generateAsync(opts: { type: "uint8array" | "nodebuffer"; compression?: string }): Promise<Uint8Array>;
+  generateAsync(opts: {
+    type: "uint8array" | "nodebuffer";
+    compression?: string;
+  }): Promise<Uint8Array>;
 }
-
-interface JszipCtor {
-  new (): JszipLike;
-}
+type JszipCtor = typeof import("jszip");
 
 async function loadJsZip(): Promise<JszipCtor | null> {
   try {
     const moduleName = "jszip";
-    const mod = (await import(/* webpackIgnore: true */ moduleName)) as { default?: JszipCtor } & JszipCtor;
+    const mod = (await import(/* webpackIgnore: true */ moduleName)) as {
+      default?: JszipCtor;
+    } & JszipCtor;
     return (mod.default ?? (mod as unknown as JszipCtor)) as JszipCtor;
   } catch {
     return null;
   }
 }
 
-export async function bundleZip(files: RegenFile[]): Promise<{ bytes: Uint8Array; usedFallback: boolean; totalUncompressed: number }> {
+export async function bundleZip(files: RegenFile[]): Promise<{
+  bytes: Uint8Array;
+  usedFallback: boolean;
+  totalUncompressed: number;
+}> {
   const Jszip = await loadJsZip();
   let totalUncompressed = 0;
-  for (const f of files) totalUncompressed += typeof f.content === "string" ? Buffer.byteLength(f.content) : f.content.byteLength;
+  for (const f of files)
+    totalUncompressed +=
+      typeof f.content === "string"
+        ? Buffer.byteLength(f.content)
+        : f.content.byteLength;
 
   if (Jszip) {
     const zip = new Jszip();
     for (const f of files) zip.file(f.path, f.content);
-    const bytes = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
+    const bytes = await zip.generateAsync({
+      type: "uint8array",
+      compression: "DEFLATE",
+    });
     return { bytes, usedFallback: false, totalUncompressed };
   }
 
