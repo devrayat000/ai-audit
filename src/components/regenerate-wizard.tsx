@@ -195,7 +195,7 @@ export function RegenerateWizard({ report, open, onClose }: Props) {
                       <label className="flex items-start gap-2 cursor-pointer text-sm">
                         <Checkbox
                           checked={humanAck}
-                          onCheckedChange={setHumanAck}
+                          onCheckedChange={(v) => setHumanAck(v === true)}
                           className="mt-0.5"
                         />
                         <span>
@@ -209,7 +209,7 @@ export function RegenerateWizard({ report, open, onClose }: Props) {
                 )}
 
                 <div className="flex items-center justify-end gap-3">
-                  {error && <p className="text-sm text-[color:var(--danger)]">{error}</p>}
+                  {error && <p className="text-sm text-danger">{error}</p>}
                   <Button
                     type="button"
                     size="lg"
@@ -281,7 +281,7 @@ function ResultView({
         <Card>
           <CardContent className="p-5 flex items-start gap-3">
             <label className="flex items-start gap-2 cursor-pointer text-sm">
-              <Checkbox checked={humanAck} onCheckedChange={onHumanAck} className="mt-0.5" />
+              <Checkbox checked={humanAck} onCheckedChange={(v) => onHumanAck(v === true)} className="mt-0.5" />
               <span>
                 I confirm that translated content has not been reviewed by a human translator.
                 I will review menu items, allergy info, legal text, and pricing before publishing.

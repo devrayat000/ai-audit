@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import type { AuditReport } from "@/lib/types";
 import type { RegenStrategy } from "@/lib/regenerator/types";
 import { Card, CardContent } from "./ui/card";
-import { Badge } from "./ui/badge";
+import { StatusBadge } from "./status-badge";
 import { cn } from "@/lib/utils";
 import { Layers, Wand2 } from "lucide-react";
 
@@ -123,17 +123,17 @@ function StrategyCard({
               <div className="size-8 rounded-md bg-foreground text-background flex items-center justify-center">{icon}</div>
               <div className="font-serif text-xl">{title}</div>
             </div>
-            {recommended && <Badge variant="ink" className="uppercase text-[10px]">Recommended</Badge>}
+            {recommended && <StatusBadge kind="ink" className="uppercase text-[10px]">Recommended</StatusBadge>}
           </div>
           <div className="text-xs font-mono text-muted-foreground">
             ⏱ {time} · 💸 {cost}
           </div>
           <ul className="text-sm space-y-1">
             {pros.map((p) => (
-              <li key={p} className="flex gap-2"><span className="text-[color:var(--success)]">✓</span>{p}</li>
+              <li key={p} className="flex gap-2"><span className="text-success">✓</span>{p}</li>
             ))}
             {cons.map((c) => (
-              <li key={c} className="flex gap-2 text-muted-foreground"><span className="text-[color:var(--warning)]">!</span>{c}</li>
+              <li key={c} className="flex gap-2 text-muted-foreground"><span className="text-warning">!</span>{c}</li>
             ))}
           </ul>
         </CardContent>

@@ -134,9 +134,9 @@ export function CheckResultRow({ check, report }: Props) {
         <div className="text-right shrink-0">
           <div className="font-mono text-sm tabular-nums">
             <span className={cn(
-              check.status === "pass" && "text-[color:var(--success)]",
-              check.status === "warn" && "text-[color:var(--warning)]",
-              check.status === "fail" && "text-[color:var(--danger)]"
+              check.status === "pass" && "text-success",
+              check.status === "warn" && "text-warning",
+              check.status === "fail" && "text-danger"
             )}>
               {check.score}
             </span>
@@ -184,11 +184,11 @@ export function CheckResultRow({ check, report }: Props) {
             </div>
           )}
 
-          {error && <div className="text-xs text-[color:var(--danger)]">{error}</div>}
+          {error && <div className="text-xs text-danger">{error}</div>}
 
           <details className="text-xs text-muted-foreground">
             <summary className="cursor-pointer hover:text-foreground">Evidence (raw)</summary>
-            <pre className="mt-2 p-3 rounded-md border border-border bg-[color:var(--paper)] font-mono text-[11px] overflow-x-auto whitespace-pre-wrap">
+            <pre className="mt-2 p-3 rounded-md border border-border bg-paper font-mono text-[11px] overflow-x-auto whitespace-pre-wrap">
               {evidenceJson}
             </pre>
           </details>

@@ -160,7 +160,7 @@ export function VerificationFlow({ domain, rootUrl, onVerified }: Props) {
               Check verification
             </Button>
             {verified && (
-              <span className={cn("inline-flex items-center gap-1 text-sm text-[color:var(--success)]")}>
+              <span className={cn("inline-flex items-center gap-1 text-sm text-success")}>
                 <Check className="size-4" /> Verified · {verified.method}
               </span>
             )}
@@ -168,7 +168,7 @@ export function VerificationFlow({ domain, rootUrl, onVerified }: Props) {
         )}
 
         {message && !verified && <p className="text-sm text-muted-foreground">{message}</p>}
-        {error && <p className="text-sm text-[color:var(--danger)]">{error}</p>}
+        {error && <p className="text-sm text-danger">{error}</p>}
       </CardContent>
     </Card>
   );

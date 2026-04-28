@@ -22,7 +22,7 @@ export function CodeSnippet({ code, language, title, className }: Props) {
     } catch {}
   };
   return (
-    <div className={cn("rounded-lg border border-border bg-[color:var(--paper)] overflow-hidden", className)}>
+    <div className={cn("rounded-lg border border-border bg-paper overflow-hidden", className)}>
       <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-secondary/30">
         <div className="text-xs font-mono text-muted-foreground">
           {title ?? (language ? language : "snippet")}

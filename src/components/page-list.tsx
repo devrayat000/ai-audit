@@ -3,15 +3,15 @@
 import { useState } from "react";
 import type { AuditReport, PageReport } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
-import { Badge } from "./ui/badge";
+import { StatusBadge, type StatusKind } from "./status-badge";
 import { CheckResultRow } from "./check-result-row";
 import { Button } from "./ui/button";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-function gradeBadgeVariant(score: number): "success" | "warning" | "danger" | "default" {
+function gradeBadgeKind(score: number): StatusKind {
   if (score >= 90) return "success";
-  if (score >= 70) return "default";
+  if (score >= 70) return "ink";
   if (score >= 50) return "warning";
   return "danger";
 }
@@ -81,9 +81,9 @@ function PageRow({
           open && "bg-muted/30"
         )}
       >
-        <Badge variant={gradeBadgeVariant(page.pageScore)} className="font-mono tabular-nums">
+        <StatusBadge kind={gradeBadgeKind(page.pageScore)} className="font-mono tabular-nums">
           {page.pageGrade} · {page.pageScore}
-        </Badge>
+        </StatusBadge>
         <div className="flex-1 min-w-0">
           <div className="font-medium text-sm truncate">{page.title || page.url}</div>
           <div className="text-xs text-muted-foreground truncate font-mono">
@@ -103,7 +103,7 @@ function PageRow({
                 <div className="text-xs font-mono uppercase text-muted-foreground mb-1">
                   Raw HTML (what AI bots see)
                 </div>
-                <pre className="text-[11px] font-mono p-3 max-h-48 overflow-auto rounded-md border border-border bg-[color:var(--paper)] whitespace-pre-wrap">
+                <pre className="text-[11px] font-mono p-3 max-h-48 overflow-auto rounded-md border border-border bg-paper whitespace-pre-wrap">
                   {page.rawHtmlPreview.slice(0, 1500)}
                 </pre>
               </div>
@@ -111,7 +111,7 @@ function PageRow({
                 <div className="text-xs font-mono uppercase text-muted-foreground mb-1">
                   Rendered HTML (what humans see)
                 </div>
-                <pre className="text-[11px] font-mono p-3 max-h-48 overflow-auto rounded-md border border-border bg-[color:var(--paper)] whitespace-pre-wrap">
+                <pre className="text-[11px] font-mono p-3 max-h-48 overflow-auto rounded-md border border-border bg-paper whitespace-pre-wrap">
                   {page.renderedHtmlPreview.slice(0, 1500)}
                 </pre>
               </div>

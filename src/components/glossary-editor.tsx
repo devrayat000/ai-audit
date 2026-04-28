@@ -3,7 +3,13 @@
 import type { GlossaryEntry } from "@/lib/regenerator/types";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Input } from "./ui/input";
-import { Select } from "./ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select";
 import { Button } from "./ui/button";
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -61,14 +67,30 @@ export function GlossaryEditor({ glossary, onChange, rootUrl, enabled }: Props) 
         {glossary.length === 0 && <p className="text-sm text-muted-foreground">No terms detected yet.</p>}
         <div className="space-y-1">
           {glossary.slice(0, 30).map((g, i) => (
-            <div key={i} className="grid grid-cols-[1fr_140px_1fr_40px] gap-2 items-center">
-              <Input value={g.source} onChange={(e) => update(i, { source: e.target.value })} placeholder="source term" className="h-9" />
-              <Select value={g.handling} onChange={(e) => update(i, { handling: e.target.value as GlossaryEntry["handling"] })} className="h-9">
-                <option value="preserve">Preserve</option>
-                <option value="transliterate">Transliterate</option>
-                <option value="translate">Translate</option>
+            <div key={i} className="grid grid-cols-[1fr_160px_1fr_40px] gap-2 items-center">
+              <Input
+                value={g.source}
+                onChange={(e) => update(i, { source: e.target.value })}
+                placeholder="source term"
+              />
+              <Select
+                value={g.handling}
+                onValueChange={(v) => v && update(i, { handling: v as GlossaryEntry["handling"] })}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="preserve">Preserve</SelectItem>
+                  <SelectItem value="transliterate">Transliterate</SelectItem>
+                  <SelectItem value="translate">Translate</SelectItem>
+                </SelectContent>
               </Select>
-              <Input value={g.target} onChange={(e) => update(i, { target: e.target.value })} placeholder="target (optional)" className="h-9" />
+              <Input
+                value={g.target}
+                onChange={(e) => update(i, { target: e.target.value })}
+                placeholder="target (optional)"
+              />
               <Button type="button" variant="ghost" size="icon-sm" onClick={() => remove(i)}>
                 <X className="size-4" />
               </Button>

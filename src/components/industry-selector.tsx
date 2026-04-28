@@ -1,6 +1,12 @@
 "use client";
 
-import { Select } from "./ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select";
 import type { Industry } from "@/lib/types";
 
 interface Props {
@@ -21,16 +27,17 @@ const OPTIONS: { value: Industry | "auto"; label: string }[] = [
 
 export function IndustrySelector({ value, onChange, className }: Props) {
   return (
-    <Select
-      className={className}
-      value={value}
-      onChange={(e) => onChange(e.target.value as Industry | "auto")}
-    >
-      {OPTIONS.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
+    <Select value={value} onValueChange={(v) => v && onChange(v as Industry | "auto")}>
+      <SelectTrigger className={className}>
+        <SelectValue placeholder="Industry" />
+      </SelectTrigger>
+      <SelectContent>
+        {OPTIONS.map((o) => (
+          <SelectItem key={o.value} value={o.value}>
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
     </Select>
   );
 }

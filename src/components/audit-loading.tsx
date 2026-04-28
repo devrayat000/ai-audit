@@ -19,7 +19,7 @@ const STEPS = [
 export function AuditLoading({ url }: Props) {
   return (
     <div className="flex flex-col items-center justify-center py-16 px-6 text-center gap-6">
-      <Loader2 className="size-10 animate-spin text-[color:var(--accent-brand)]" />
+      <Loader2 className="size-10 animate-spin text-accent-brand" />
       <div className="space-y-1">
         <h2 className="font-serif text-2xl">Auditing {url}</h2>
         <p className="text-sm text-muted-foreground">
@@ -29,7 +29,7 @@ export function AuditLoading({ url }: Props) {
       <ul className="text-sm text-muted-foreground space-y-1.5 text-left">
         {STEPS.map((s) => (
           <li key={s} className="flex items-start gap-2">
-            <span className="mt-1.5 size-1.5 rounded-full bg-[color:var(--accent-brand)]/60" />
+            <span className="mt-1.5 size-1.5 rounded-full bg-(--accent-brand)/60" />
             {s}
           </li>
         ))}

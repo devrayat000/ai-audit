@@ -2,19 +2,19 @@
 
 import type { TranslationWarning } from "@/lib/regenerator/types";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
-import { Badge } from "./ui/badge";
+import { StatusBadge, type StatusKind } from "./status-badge";
 import { AlertTriangle } from "lucide-react";
 
 interface Props {
   warnings: TranslationWarning[];
 }
 
-const KIND_LABEL: Record<TranslationWarning["kind"], { label: string; variant: "warning" | "danger" }> = {
-  overflow: { label: "Layout overflow", variant: "warning" },
-  truncation: { label: "Truncation", variant: "warning" },
-  "rtl-flip": { label: "RTL/LTR review", variant: "warning" },
-  "legal-flag": { label: "Legal/medical", variant: "danger" },
-  "preservation-fail": { label: "Preservation fail", variant: "danger" },
+const KIND_LABEL: Record<TranslationWarning["kind"], { label: string; kind: StatusKind }> = {
+  overflow: { label: "Layout overflow", kind: "warning" },
+  truncation: { label: "Truncation", kind: "warning" },
+  "rtl-flip": { label: "RTL/LTR review", kind: "warning" },
+  "legal-flag": { label: "Legal/medical", kind: "danger" },
+  "preservation-fail": { label: "Preservation fail", kind: "danger" },
 };
 
 export function TranslationWarningsView({ warnings }: Props) {
@@ -23,7 +23,7 @@ export function TranslationWarningsView({ warnings }: Props) {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <AlertTriangle className="size-5 text-[color:var(--warning)]" />
+          <AlertTriangle className="size-5 text-warning" />
           Translation review needed ({warnings.length})
         </CardTitle>
         <p className="text-sm text-muted-foreground">
@@ -37,7 +37,7 @@ export function TranslationWarningsView({ warnings }: Props) {
             return (
               <li key={i} className="p-3 flex flex-col gap-1">
                 <div className="flex items-center gap-2 text-xs">
-                  <Badge variant={k.variant}>{k.label}</Badge>
+                  <StatusBadge kind={k.kind}>{k.label}</StatusBadge>
                   <span className="font-mono truncate">{w.pageUrl}</span>
                 </div>
                 <div className="text-sm">{w.message}</div>

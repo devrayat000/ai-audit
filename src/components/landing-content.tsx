@@ -61,14 +61,14 @@ export function LandingContent() {
       <section className="px-6 pt-20 pb-16 md:pt-32 md:pb-24">
         <div className="max-w-4xl mx-auto flex flex-col items-start gap-8">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-border bg-card text-xs font-mono uppercase tracking-widest text-muted-foreground">
-            <span className="size-1.5 rounded-full bg-[color:var(--accent-brand)] animate-pulse" />
+            <span className="size-1.5 rounded-full bg-accent-brand animate-pulse" />
             Generative Engine Optimization
           </div>
           <h1 className="font-serif text-5xl md:text-7xl leading-[0.95] tracking-tight">
             See your website
             <br />
             through an{" "}
-            <span className="italic text-[color:var(--accent-brand)]">AI's</span>{" "}
+            <span className="italic text-accent-brand">AI's</span>{" "}
             eyes.
           </h1>
           <p className="max-w-xl text-lg text-muted-foreground leading-relaxed">
@@ -79,7 +79,7 @@ export function LandingContent() {
           <div className="w-full max-w-2xl mt-2">
             <AuditForm onSubmit={start} />
             {phase.name === "error" && (
-              <div className="mt-3 text-sm text-[color:var(--danger)]">{phase.message}</div>
+              <div className="mt-3 text-sm text-danger">{phase.message}</div>
             )}
           </div>
         </div>

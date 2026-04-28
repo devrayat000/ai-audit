@@ -3,10 +3,14 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
-import { Select } from "./ui/select";
-import { Button } from "./ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select";
 import { Checkbox } from "./ui/checkbox";
-import { Loader2 } from "lucide-react";
 import type { DetectedLanguage, GlossaryEntry, TranslationConfig, TranslationMode } from "@/lib/regenerator/types";
 import type { Industry } from "@/lib/types";
 
@@ -78,14 +82,15 @@ export function LanguagePicker({ rootUrl, industry, enabled, onEnabledChange, co
       return;
     }
     if (!config) {
-      const target = detected.language === "en" ? "es" : "en";
+      const target: string = detected.language === "en" ? "es" : "en";
+      const rtlSet = new Set(["ar", "he", "fa", "ur"]);
       onConfigChange({
         mode: "transcreate",
         sourceLanguage: detected.language,
         sourceScript: detected.script,
         sourceDirection: detected.direction,
         targetLanguage: target,
-        targetDirection: target === "ar" || target === "he" || target === "fa" || target === "ur" ? "rtl" : "ltr",
+        targetDirection: rtlSet.has(target) ? "rtl" : "ltr",
         glossary,
         industry,
       });
@@ -108,14 +113,14 @@ export function LanguagePicker({ rootUrl, industry, enabled, onEnabledChange, co
         <CardTitle>Language &amp; localization</CardTitle>
         <p className="text-sm text-muted-foreground">
           {loading ? "Detecting source language…" :
-            detected ? <>Detected source: <Badge variant="outline" className="ml-1">{detected.language} · {detected.script} · {detected.direction.toUpperCase()}</Badge>{" "}{detected.needsConfirmation && <span className="text-[color:var(--warning)]">(low confidence — confirm before translating)</span>}</> :
+            detected ? <>Detected source: <Badge variant="outline" className="ml-1">{detected.language} · {detected.script} · {detected.direction.toUpperCase()}</Badge>{" "}{detected.needsConfirmation && <span className="text-warning">(low confidence — confirm before translating)</span>}</> :
             "Could not detect language."}
         </p>
-        {error && <p className="text-sm text-[color:var(--danger)]">{error}</p>}
+        {error && <p className="text-sm text-danger">{error}</p>}
       </CardHeader>
       <CardContent className="space-y-4">
         <label className="flex items-center gap-2 cursor-pointer">
-          <Checkbox checked={enabled} onCheckedChange={onEnabledChange} />
+          <Checkbox checked={enabled} onCheckedChange={(v) => onEnabledChange(v === true)} />
           <span className="text-sm">Translate to a different language</span>
         </label>
 
@@ -123,18 +128,30 @@ export function LanguagePicker({ rootUrl, industry, enabled, onEnabledChange, co
           <div className="grid sm:grid-cols-2 gap-4">
             <div>
               <label className="text-xs uppercase tracking-widest text-muted-foreground">Target language</label>
-              <Select value={config.targetLanguage} onChange={(e) => setTarget(e.target.value)} className="mt-1">
-                {COMMON_LANGS.map((l) => (
-                  <option key={l.code} value={l.code}>{l.label}</option>
-                ))}
+              <Select value={config.targetLanguage} onValueChange={(v) => v && setTarget(v)}>
+                <SelectTrigger className="mt-1 w-full">
+                  <SelectValue placeholder="Pick a language" />
+                </SelectTrigger>
+                <SelectContent>
+                  {COMMON_LANGS.map((l) => (
+                    <SelectItem key={l.code} value={l.code}>{l.label}</SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             </div>
             <div>
               <label className="text-xs uppercase tracking-widest text-muted-foreground">Mode</label>
-              <Select value={config.mode} onChange={(e) => setMode(e.target.value as TranslationMode)} className="mt-1">
-                <option value="literal">Literal — exact translation</option>
-                <option value="transcreate">Transcreate — idiomatic rewrite</option>
-                <option value="bilingual">Bilingual — keep original AND add /{config.targetLanguage}/ subtree (recommended for SEO + AI)</option>
+              <Select value={config.mode} onValueChange={(v) => v && setMode(v as TranslationMode)}>
+                <SelectTrigger className="mt-1 w-full">
+                  <SelectValue placeholder="Mode" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="literal">Literal — exact translation</SelectItem>
+                  <SelectItem value="transcreate">Transcreate — idiomatic rewrite</SelectItem>
+                  <SelectItem value="bilingual">
+                    Bilingual — keep original AND add /{config.targetLanguage}/ subtree (recommended)
+                  </SelectItem>
+                </SelectContent>
               </Select>
             </div>
           </div>
