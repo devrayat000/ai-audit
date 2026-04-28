@@ -559,7 +559,7 @@ export function ${c.name}() {
     translationWarnings: warnings,
     totalSizeBytes: totalUncompressed,
     durationMs: Date.now() - t0,
-    zipBase64: bytes.toBase64({ alphabet: "base64" }),
+    zipBase64: Buffer.from(bytes).toString("base64"),
     notes,
   };
 }
