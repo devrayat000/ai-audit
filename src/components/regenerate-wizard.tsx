@@ -21,6 +21,7 @@ import { SideBySidePreview } from "./side-by-side-preview";
 import { DiffViewer } from "./diff-viewer";
 import { TranslationWarningsView } from "./translation-warnings";
 import { DeployButtons } from "./deploy-buttons";
+import { DeployToVercel } from "./deploy-to-vercel";
 import { getDomain, normalizeUrl } from "@/lib/utils/url";
 
 interface Props {
@@ -34,33 +35,61 @@ interface RegenResponse {
   rootUrl: string;
   domain: string;
   fixesApplied: string[];
-  pageDiffs: Array<{ url: string; changes: { type: "added" | "removed" | "context"; line: string }[]; beforeLines: number; afterLines: number }>;
+  pageDiffs: Array<{
+    url: string;
+    changes: { type: "added" | "removed" | "context"; line: string }[];
+    beforeLines: number;
+    afterLines: number;
+  }>;
   homepagePreview: string;
+  originalHomepageScreenshot?: string;
   translationWarnings: import("@/lib/regenerator/types").TranslationWarning[];
   zipBase64: string;
   durationMs: number;
   notes: string[];
 }
 
+const DEV_BYPASS =
+  process.env.NODE_ENV !== "production" ||
+  process.env.NEXT_PUBLIC_ALLOW_REGEN_WITHOUT_VERIFICATION === "true";
+
 export function RegenerateWizard({ report, open, onClose }: Props) {
-  const domain = useMemo(() => getDomain(report.rootUrl).replace(/^www\./, ""), [report.rootUrl]);
+  const domain = useMemo(
+    () => getDomain(report.rootUrl).replace(/^www\./, ""),
+    [report.rootUrl],
+  );
   const rootUrl = useMemo(() => normalizeUrl(report.rootUrl), [report.rootUrl]);
 
-  const [verified, setVerified] = useState<VerifiedState | null>(null);
+  const [verified, setVerified] = useState<VerifiedState | null>(
+    DEV_BYPASS
+      ? () => ({
+          proof: "dev-bypass",
+          method: "meta-tag",
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        })
+      : null,
+  );
+
   const [strategy, setStrategy] = useState<RegenStrategy>("static-surgery");
   const [translateEnabled, setTranslateEnabled] = useState(false);
-  const [translation, setTranslation] = useState<TranslationConfig | null>(null);
-  const [glossaryOverride, setGlossaryOverride] = useState<GlossaryEntry[] | null>(null);
-  const [fixes, setFixes] = useState<{ analyzerKey: string; enabled: boolean }[]>(
-    () => {
-      const all = [
-        ...report.siteChecks,
-        ...report.pages.flatMap((p) => p.checks),
-      ];
-      const keys = Array.from(new Set(all.filter((c) => c.status !== "pass").map((c) => c.analyzerKey)));
-      return keys.map((k) => ({ analyzerKey: k, enabled: true }));
-    }
+  const [translation, setTranslation] = useState<TranslationConfig | null>(
+    null,
   );
+  const [glossaryOverride, setGlossaryOverride] = useState<
+    GlossaryEntry[] | null
+  >(null);
+  const [fixes, setFixes] = useState<
+    { analyzerKey: string; enabled: boolean }[]
+  >(() => {
+    const all = [
+      ...report.siteChecks,
+      ...report.pages.flatMap((p) => p.checks),
+    ];
+    const keys = Array.from(
+      new Set(all.filter((c) => c.status !== "pass").map((c) => c.analyzerKey)),
+    );
+    return keys.map((k) => ({ analyzerKey: k, enabled: true }));
+  });
   const [humanAck, setHumanAck] = useState(false);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<RegenResponse | null>(null);
@@ -76,7 +105,11 @@ export function RegenerateWizard({ report, open, onClose }: Props) {
   const canRun =
     !!verified &&
     fixes.some((f) => f.enabled) &&
-    (!translateEnabled || (translationCfg && (translationCfg.mode === "literal" || translationCfg.mode === "transcreate" || translationCfg.mode === "bilingual"))) &&
+    (!translateEnabled ||
+      (translationCfg &&
+        (translationCfg.mode === "literal" ||
+          translationCfg.mode === "transcreate" ||
+          translationCfg.mode === "bilingual"))) &&
     !running;
 
   const start = async () => {
@@ -94,13 +127,14 @@ export function RegenerateWizard({ report, open, onClose }: Props) {
           strategy,
           proof: verified.proof,
           fixes,
-          translation: translateEnabled && translationCfg
-            ? {
-                ...translationCfg,
-                humanReviewAcknowledged: humanAck,
-                glossary: finalGlossary,
-              }
-            : undefined,
+          translation:
+            translateEnabled && translationCfg
+              ? {
+                  ...translationCfg,
+                  humanReviewAcknowledged: humanAck,
+                  glossary: finalGlossary,
+                }
+              : undefined,
           inlineAssets: false,
         }),
       });
@@ -122,25 +156,58 @@ export function RegenerateWizard({ report, open, onClose }: Props) {
       <div className="max-w-5xl mx-auto px-4 py-10">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <div className="text-xs uppercase tracking-widest text-muted-foreground">Regenerator</div>
-            <h2 className="font-serif text-3xl">AI-optimized clone of your site</h2>
+            <div className="text-xs uppercase tracking-widest text-muted-foreground">
+              Regenerator
+            </div>
+            <h2 className="font-serif text-3xl">
+              AI-optimized clone of your site
+            </h2>
             <p className="text-sm text-muted-foreground mt-1">
               We preserve your design and inject every fix the audit flagged.{" "}
-              <span className="text-foreground">Domain ownership verification is mandatory.</span>
+              <span className="text-foreground">
+                {DEV_BYPASS
+                  ? "Dev/test mode — domain ownership verification is bypassed."
+                  : "Domain ownership verification is mandatory."}
+              </span>
             </p>
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            aria-label="Close"
+          >
             <X className="size-5" />
           </Button>
         </div>
 
         {!result && (
           <div className="space-y-5">
-            <VerificationFlow
-              domain={domain}
-              rootUrl={rootUrl}
-              onVerified={(v) => setVerified(v)}
-            />
+            {DEV_BYPASS ? (
+              <Card>
+                <CardContent className="p-4 flex items-center gap-3">
+                  <span className="inline-flex size-2 rounded-full bg-warning" />
+                  <div className="text-sm">
+                    <span className="font-medium">Verification bypassed</span>
+                    <span className="text-muted-foreground">
+                      {" "}
+                      — this build is non-production (
+                      <code className="font-mono">
+                        NODE_ENV={process.env.NODE_ENV ?? "undefined"}
+                      </code>
+                      ). In production, real DNS or meta-tag verification will
+                      be required.
+                    </span>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <VerificationFlow
+                domain={domain}
+                rootUrl={rootUrl}
+                onVerified={(v) => setVerified(v)}
+              />
+            )}
 
             {verified && (
               <>
@@ -181,7 +248,11 @@ export function RegenerateWizard({ report, open, onClose }: Props) {
                   />
                 )}
 
-                <FixesChecklist report={report} fixes={fixes} onChange={setFixes} />
+                <FixesChecklist
+                  report={report}
+                  fixes={fixes}
+                  onChange={setFixes}
+                />
 
                 {translateEnabled && (
                   <Card>
@@ -199,9 +270,10 @@ export function RegenerateWizard({ report, open, onClose }: Props) {
                           className="mt-0.5"
                         />
                         <span>
-                          I acknowledge that translated content has not been reviewed by a human translator.
-                          I will review the output — especially menu items, allergy info, legal text, and pricing —
-                          before publishing.
+                          I acknowledge that translated content has not been
+                          reviewed by a human translator. I will review the
+                          output — especially menu items, allergy info, legal
+                          text, and pricing — before publishing.
                         </span>
                       </label>
                     </CardContent>
@@ -216,7 +288,11 @@ export function RegenerateWizard({ report, open, onClose }: Props) {
                     onClick={start}
                     disabled={!canRun || (translateEnabled && !humanAck)}
                   >
-                    {running ? <Loader2 className="size-4 animate-spin" /> : <Rocket className="size-4" />}
+                    {running ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Rocket className="size-4" />
+                    )}
                     {running ? "Regenerating…" : "Start regeneration"}
                   </Button>
                 </div>
@@ -266,14 +342,20 @@ function ResultView({
       <Card>
         <CardContent className="p-5 flex flex-wrap items-center justify-between gap-4">
           <div>
-            <div className="text-xs uppercase tracking-widest text-muted-foreground">Regenerated in {(result.durationMs / 1000).toFixed(1)}s</div>
+            <div className="text-xs uppercase tracking-widest text-muted-foreground">
+              Regenerated in {(result.durationMs / 1000).toFixed(1)}s
+            </div>
             <div className="font-serif text-2xl mt-1">Ready to download</div>
             <div className="text-sm text-muted-foreground mt-1">
-              {result.fixesApplied.length} fix(es) applied · {result.pageDiffs.length} page(s) processed
-              {result.translationWarnings.length > 0 && ` · ${result.translationWarnings.length} translation warning(s)`}
+              {result.fixesApplied.length} fix(es) applied ·{" "}
+              {result.pageDiffs.length} page(s) processed
+              {result.translationWarnings.length > 0 &&
+                ` · ${result.translationWarnings.length} translation warning(s)`}
             </div>
           </div>
-          <Button variant="outline" onClick={onReset}>Configure another run</Button>
+          <Button variant="outline" onClick={onReset}>
+            Configure another run
+          </Button>
         </CardContent>
       </Card>
 
@@ -281,11 +363,19 @@ function ResultView({
         <Card>
           <CardContent className="p-5 flex items-start gap-3">
             <label className="flex items-start gap-2 cursor-pointer text-sm">
-              <Checkbox checked={humanAck} onCheckedChange={(v) => onHumanAck(v === true)} className="mt-0.5" />
+              <Checkbox
+                checked={humanAck}
+                onCheckedChange={(v) => onHumanAck(v === true)}
+                className="mt-0.5"
+              />
               <span>
-                I confirm that translated content has not been reviewed by a human translator.
-                I will review menu items, allergy info, legal text, and pricing before publishing.
-                <strong> The download will not unlock until this is checked.</strong>
+                I confirm that translated content has not been reviewed by a
+                human translator. I will review menu items, allergy info, legal
+                text, and pricing before publishing.
+                <strong>
+                  {" "}
+                  The download will not unlock until this is checked.
+                </strong>
               </span>
             </label>
           </CardContent>
@@ -293,7 +383,9 @@ function ResultView({
       )}
 
       <Card>
-        <CardHeader><CardTitle>Download &amp; deploy</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle>Download &amp; deploy</CardTitle>
+        </CardHeader>
         <CardContent>
           <DeployButtons
             zipBase64={result.zipBase64}
@@ -301,12 +393,23 @@ function ResultView({
             acknowledged={!translateEnabled || humanAck}
           />
           <p className="text-xs text-muted-foreground mt-2">
-            Tip: drop the unzipped folder onto Netlify Drop, or run <code className="font-mono">vercel</code> in the unzipped directory.
+            Tip: drop the unzipped folder onto Netlify Drop, or use the one-click
+            Vercel deploy below.
           </p>
         </CardContent>
       </Card>
 
-      <SideBySidePreview originalUrl={originalUrl} optimizedHtml={result.homepagePreview} />
+      <DeployToVercel
+        zipBase64={result.zipBase64}
+        projectNameSeed={domain}
+        acknowledged={!translateEnabled || humanAck}
+      />
+
+      <SideBySidePreview
+        originalUrl={originalUrl}
+        originalScreenshotBase64={result.originalHomepageScreenshot}
+        optimizedHtml={result.homepagePreview}
+      />
 
       <TranslationWarningsView warnings={result.translationWarnings} />
 
@@ -314,10 +417,14 @@ function ResultView({
 
       {result.notes.length > 0 && (
         <Card>
-          <CardHeader><CardTitle>Pipeline notes</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Pipeline notes</CardTitle>
+          </CardHeader>
           <CardContent>
             <ul className="text-xs font-mono text-muted-foreground space-y-1">
-              {result.notes.slice(0, 30).map((n, i) => <li key={i}>· {n}</li>)}
+              {result.notes.slice(0, 30).map((n, i) => (
+                <li key={i}>· {n}</li>
+              ))}
             </ul>
           </CardContent>
         </Card>

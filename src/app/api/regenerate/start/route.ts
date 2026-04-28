@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
-import { verifyProof } from "@/lib/verification/token";
+import { isVerificationBypassed, verifyProof } from "@/lib/verification/token";
 import { runRegeneration } from "@/lib/regenerator";
 import { getDomain, normalizeUrl } from "@/lib/utils/url";
 
@@ -32,7 +32,7 @@ const schema = z.object({
   rootUrl: z.string().min(4),
   industry: z.enum(["restaurant", "travel", "service", "ecommerce", "blog", "general"]),
   strategy: z.enum(["static-surgery", "next-project"]),
-  proof: z.string(),
+  proof: z.string().optional(),
   fixes: z.array(z.object({ analyzerKey: z.string(), enabled: z.boolean() })),
   translation: translationCfg.optional(),
   inlineAssets: z.boolean().optional(),
@@ -61,12 +61,28 @@ export async function POST(req: NextRequest) {
   const rootUrl = normalizeUrl(data.rootUrl);
   const domain = getDomain(rootUrl).replace(/^www\./, "");
 
-  const v = verifyProof(data.proof, domain);
-  if (!v.valid) {
-    return Response.json(
-      { error: `Domain ownership proof invalid: ${v.reason ?? "unknown"}.`, code: "UNVERIFIED" },
-      { status: 403 }
+  const bypass = isVerificationBypassed();
+  let v: { valid: boolean; method?: "dns-txt" | "meta-tag"; expiresAt?: number; reason?: string };
+  if (bypass) {
+    v = { valid: true, method: "meta-tag" };
+    console.warn(
+      `[regenerate] Verification BYPASSED for ${domain} — NODE_ENV=${process.env.NODE_ENV ?? "undefined"}, ALLOW_REGEN_WITHOUT_VERIFICATION=${process.env.ALLOW_REGEN_WITHOUT_VERIFICATION ?? "false"}. ` +
+        "This MUST NOT happen in production."
     );
+  } else {
+    if (!data.proof) {
+      return Response.json(
+        { error: "Domain ownership proof is required in production.", code: "UNVERIFIED" },
+        { status: 403 }
+      );
+    }
+    v = verifyProof(data.proof, domain);
+    if (!v.valid) {
+      return Response.json(
+        { error: `Domain ownership proof invalid: ${v.reason ?? "unknown"}.`, code: "UNVERIFIED" },
+        { status: 403 }
+      );
+    }
   }
 
   const tx = data.translation;
@@ -117,6 +133,7 @@ export async function POST(req: NextRequest) {
         afterLines: d.after.split("\n").length,
       })),
       homepagePreview: result.homepagePreview,
+      originalHomepageScreenshot: result.originalHomepageScreenshot,
       translationWarnings: result.translationWarnings,
       totalSizeBytes: result.totalSizeBytes,
       durationMs: result.durationMs,

@@ -47,7 +47,8 @@ export interface RegenInput {
   rootUrl: string;
   industry: Industry;
   strategy: RegenStrategy;
-  proof: string;
+  /** signed verification proof. Optional in dev/test; required when isVerificationBypassed() is false. */
+  proof?: string;
   fixes: FixToggle[];
   translation?: TranslationConfig;
   inlineAssets?: boolean;
@@ -83,6 +84,8 @@ export interface RegenResult {
   fixesApplied: string[];
   pageDiffs: PageDiff[];
   homepagePreview: string;
+  /** base64 JPEG screenshot of original homepage (for the side-by-side preview) */
+  originalHomepageScreenshot?: string;
   translationWarnings: TranslationWarning[];
   totalSizeBytes: number;
   durationMs: number;

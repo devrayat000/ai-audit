@@ -43,15 +43,6 @@ export function DeployButtons({ zipBase64, fileName, acknowledged }: Props) {
         <ExternalLink className="size-4" />
         Open Netlify Drop
       </Button>
-      <Button
-        variant="outline"
-        size="lg"
-        disabled={!acknowledged}
-        onClick={() => window.open("https://vercel.com/new", "_blank", "noopener")}
-      >
-        <ExternalLink className="size-4" />
-        Open Vercel
-      </Button>
     </div>
   );
 }

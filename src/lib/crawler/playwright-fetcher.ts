@@ -10,7 +10,15 @@ export interface RenderResult {
   responseHeaders: Record<string, string>;
   loadTimeMs: number;
   links: string[];
+  /** base64-encoded JPEG screenshot of the viewport, only set when opts.screenshot === true */
+  screenshotBase64?: string;
   error?: string;
+}
+
+export interface RenderOptions {
+  screenshot?: boolean;
+  viewportWidth?: number;
+  viewportHeight?: number;
 }
 
 let browserPromise: Promise<Browser> | null = null;
@@ -35,10 +43,13 @@ export async function closeBrowser(): Promise<void> {
   }
 }
 
-export async function renderPage(url: string): Promise<RenderResult> {
+export async function renderPage(url: string, opts: RenderOptions = {}): Promise<RenderResult> {
   const t0 = Date.now();
   const browser = await getBrowser();
-  const ctx = await browser.newContext({ userAgent: DEFAULT_HUMAN_UA });
+  const ctx = await browser.newContext({
+    userAgent: DEFAULT_HUMAN_UA,
+    viewport: { width: opts.viewportWidth ?? 1280, height: opts.viewportHeight ?? 800 },
+  });
   const page = await ctx.newPage();
   let status = 0;
   let responseHeaders: Record<string, string> = {};
@@ -60,6 +71,19 @@ export async function renderPage(url: string): Promise<RenderResult> {
       });
       return out;
     });
+    let screenshotBase64: string | undefined;
+    if (opts.screenshot) {
+      try {
+        const buf = await page.screenshot({
+          type: "jpeg",
+          quality: 70,
+          fullPage: false,
+        });
+        screenshotBase64 = Buffer.from(buf).toString("base64");
+      } catch {
+        // ignore screenshot failures
+      }
+    }
     const finalUrl = page.url();
     return {
       url,
@@ -70,6 +94,7 @@ export async function renderPage(url: string): Promise<RenderResult> {
       responseHeaders,
       loadTimeMs: Date.now() - t0,
       links,
+      screenshotBase64,
     };
   } catch (e) {
     return {

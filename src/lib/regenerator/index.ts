@@ -6,6 +6,7 @@ import { rewriteSemantics } from "./static-surgery/semantic-rewriter";
 import { fixAltText } from "./static-surgery/alt-text-generator";
 import { rewriteCopy } from "./static-surgery/copy-rewriter";
 import { rewriteAssetUrls } from "./static-surgery/asset-inliner";
+import { inlineStylesheets } from "./static-surgery/css-inliner";
 import { bundleZip } from "./static-surgery/bundler";
 import { buildLlmsTxt, buildLlmsFullTxt } from "./files/llms-txt-generator";
 import { buildRobotsTxt } from "./files/robots-txt-generator";
@@ -148,9 +149,10 @@ export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
 
   // Fresh crawl (we don't persist audit data; on-the-fly).
   notes.push("Crawling site for regeneration…");
-  const { siteData, pages, errors } = await crawlSite(input.rootUrl, {
+  const { siteData, pages, errors, homepageScreenshot } = await crawlSite(input.rootUrl, {
     industry: input.industry,
     maxPages: Math.min(input.maxPages ?? 12, Number(process.env.MAX_REGEN_PAGES ?? 50)),
+    screenshotHomepage: true,
   });
   notes.push(...errors.slice(0, 5).map((e) => `crawl: ${e}`));
 
@@ -232,12 +234,25 @@ export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
       });
       html = headRes.html;
       headRes.applied.forEach((k) => fixesApplied.add(k));
-      // 6. Asset URLs
+      // 6. Asset URLs — make all relative refs absolute back to origin
       html = rewriteAssetUrls(html, {
         pageUrl: page.url,
         rootUrl: input.rootUrl,
-        absolutize: input.inlineAssets !== true,
+        absolutize: true,
       });
+      // 7. Inline stylesheets (defeat hotlink protection / CORP / Referer-based blocks)
+      try {
+        const cssRes = await inlineStylesheets(html, {
+          pageUrl: page.url,
+          inlineScripts: input.inlineAssets === true,
+        });
+        html = cssRes.html;
+        if (cssRes.inlinedCss > 0) notes.push(`Inlined ${cssRes.inlinedCss} stylesheet(s) on ${page.url}.`);
+        if (cssRes.inlinedJs > 0) notes.push(`Inlined ${cssRes.inlinedJs} script(s) on ${page.url}.`);
+        notes.push(...cssRes.notes);
+      } catch (e) {
+        notes.push(`CSS inline failed for ${page.url}: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
 
     const sourceVersionHtml = html;
@@ -411,6 +426,7 @@ export function ${c.name}() {
     fixesApplied: [...fixesApplied],
     pageDiffs,
     homepagePreview,
+    originalHomepageScreenshot: homepageScreenshot,
     translationWarnings: warnings,
     totalSizeBytes: totalUncompressed,
     durationMs: Date.now() - t0,

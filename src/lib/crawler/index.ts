@@ -11,6 +11,8 @@ export interface CrawlOptions {
   maxPages?: number;
   maxDepth?: number;
   industry?: Industry;
+  /** capture a viewport screenshot for the homepage (used by the regenerator preview) */
+  screenshotHomepage?: boolean;
   onProgress?: (event: CrawlEvent) => void;
 }
 
@@ -27,13 +29,15 @@ interface CrawlOutcome {
   siteData: SiteData;
   pages: PageData[];
   errors: string[];
+  /** base64 JPEG of the homepage's rendered viewport, if requested */
+  homepageScreenshot?: string;
 }
 
 export async function crawlSite(
   inputUrl: string,
   opts: CrawlOptions = {}
 ): Promise<CrawlOutcome> {
-  const { maxPages = 25, maxDepth = 3, industry: forcedIndustry, onProgress } = opts;
+  const { maxPages = 25, maxDepth = 3, industry: forcedIndustry, screenshotHomepage, onProgress } = opts;
   const errors: string[] = [];
   const rootUrl = normalizeUrl(inputUrl);
   onProgress?.({ type: "site:start", rootUrl });
@@ -110,6 +114,7 @@ export async function crawlSite(
 
   const pages: PageData[] = [];
   let idx = 0;
+  let homepageScreenshot: string | undefined;
 
   while (queue.length > 0 && pages.length < maxPages) {
     const { url, depth } = queue.shift()!;
@@ -123,7 +128,11 @@ export async function crawlSite(
 
     try {
       const raw = await fetchRaw(url);
-      const rendered = await renderPage(url);
+      const wantShot = !!screenshotHomepage && url === rootUrl;
+      const rendered = await renderPage(url, { screenshot: wantShot });
+      if (rendered.screenshotBase64 && !homepageScreenshot) {
+        homepageScreenshot = rendered.screenshotBase64;
+      }
       const statusCode = rendered.status || raw.status;
 
       const html = rendered.renderedHtml || raw.body;
@@ -163,7 +172,7 @@ export async function crawlSite(
   await closeBrowser().catch(() => {});
   onProgress?.({ type: "site:done", pages: pages.length });
 
-  return { siteData, pages, errors };
+  return { siteData, pages, errors, homepageScreenshot };
 }
 
 function extractSchemaTypes(html: string): string[] {

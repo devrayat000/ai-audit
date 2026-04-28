@@ -13,6 +13,7 @@ const nextConfig: NextConfig = {
     "jszip",
     "franc-min",
     "rtl-detect",
+    "@vercel/client",
   ],
 };
 

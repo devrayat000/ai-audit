@@ -3,11 +3,13 @@
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Button } from "./ui/button";
-import { Monitor, Smartphone, Tablet } from "lucide-react";
+import { ExternalLink, Monitor, Smartphone, Tablet } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Props {
   originalUrl: string;
+  /** base64 JPEG screenshot captured during the regen crawl. Preferred over the iframe — most sites send X-Frame-Options that block embedding. */
+  originalScreenshotBase64?: string;
   optimizedHtml: string;
 }
 
@@ -19,7 +21,7 @@ const SIZES = {
 
 type SizeKey = keyof typeof SIZES;
 
-export function SideBySidePreview({ originalUrl, optimizedHtml }: Props) {
+export function SideBySidePreview({ originalUrl, originalScreenshotBase64, optimizedHtml }: Props) {
   const [size, setSize] = useState<SizeKey>("desktop");
   const width = SIZES[size];
 
@@ -44,22 +46,47 @@ export function SideBySidePreview({ originalUrl, optimizedHtml }: Props) {
       <CardContent>
         <div className="grid md:grid-cols-2 gap-4">
           <PreviewPane label="Original" subtitle={originalUrl}>
-            <iframe
-              src={originalUrl}
-              sandbox="allow-same-origin"
-              className={cn("w-full h-[60vh] bg-white border border-border rounded-md")}
-              style={{ width: "100%", maxWidth: width }}
-            />
+            {originalScreenshotBase64 ? (
+              <div className="relative">
+                <img
+                  src={`data:image/jpeg;base64,${originalScreenshotBase64}`}
+                  alt={`Screenshot of ${originalUrl}`}
+                  className="w-full h-auto rounded-md border border-border bg-white"
+                  style={{ maxWidth: width }}
+                />
+                <a
+                  href={originalUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="absolute top-2 right-2 inline-flex items-center gap-1 rounded-md bg-background/90 px-2 py-1 text-xs font-mono shadow-sm hover:bg-background"
+                >
+                  Open <ExternalLink className="size-3" />
+                </a>
+              </div>
+            ) : (
+              <iframe
+                src={originalUrl}
+                sandbox="allow-same-origin"
+                className={cn("w-full h-[60vh] bg-white border border-border rounded-md")}
+                style={{ width: "100%", maxWidth: width }}
+              />
+            )}
           </PreviewPane>
           <PreviewPane label="Optimized" subtitle="In-memory regeneration">
             <iframe
               srcDoc={optimizedHtml}
-              sandbox="allow-same-origin"
+              sandbox="allow-same-origin allow-scripts"
               className={cn("w-full h-[60vh] bg-white border border-border rounded-md")}
               style={{ width: "100%", maxWidth: width }}
             />
           </PreviewPane>
         </div>
+        {!originalScreenshotBase64 && (
+          <p className="text-xs text-muted-foreground mt-3">
+            Note: most sites send X-Frame-Options or CSP headers that block being embedded in an iframe. If the
+            Original pane shows blank, that's the cause — the optimized pane uses srcdoc and bypasses it.
+          </p>
+        )}
       </CardContent>
     </Card>
   );

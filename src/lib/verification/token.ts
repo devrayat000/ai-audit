@@ -4,6 +4,19 @@ function getSecret(): string {
   return process.env.VERIFICATION_SECRET || "dev-only-insecure-secret-change-me";
 }
 
+/**
+ * Returns true when domain ownership verification should be bypassed:
+ *  - NODE_ENV is anything other than "production" (dev / test runs), OR
+ *  - ALLOW_REGEN_WITHOUT_VERIFICATION=true is explicitly set.
+ *
+ * Production deployments require real verification.
+ */
+export function isVerificationBypassed(): boolean {
+  if (process.env.ALLOW_REGEN_WITHOUT_VERIFICATION === "true") return true;
+  if (process.env.NODE_ENV !== "production") return true;
+  return false;
+}
+
 function b64url(buf: Buffer | string): string {
   const b = typeof buf === "string" ? Buffer.from(buf) : buf;
   return b.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
