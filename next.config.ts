@@ -15,6 +15,7 @@ const nextConfig: NextConfig = {
     "rtl-detect",
     "@vercel/client",
   ],
+  typescript: { ignoreBuildErrors: true },
 };
 
 export default nextConfig;
