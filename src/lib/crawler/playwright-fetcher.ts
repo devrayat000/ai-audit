@@ -25,10 +25,19 @@ let browserPromise: Promise<Browser> | null = null;
 
 async function getBrowser(): Promise<Browser> {
   if (!browserPromise) {
-    browserPromise = (async () => {
-      const { chromium } = await import("playwright");
-      return chromium.launch({ headless: true });
-    })();
+    if (process.env.VERCEL) {
+      browserPromise = (async () => {
+        const { chromium } = await import("playwright");
+        return chromium.connectOverCDP(
+          `wss://production-sfo.browserless.io?token=${process.env.BROWSERLESS_API_KEY}`,
+        );
+      })();
+    } else {
+      browserPromise = (async () => {
+        const { chromium } = await import("playwright");
+        return chromium.launch({ headless: true });
+      })();
+    }
   }
   return browserPromise;
 }
@@ -43,25 +52,34 @@ export async function closeBrowser(): Promise<void> {
   }
 }
 
-export async function renderPage(url: string, opts: RenderOptions = {}): Promise<RenderResult> {
+export async function renderPage(
+  url: string,
+  opts: RenderOptions = {},
+): Promise<RenderResult> {
   const t0 = Date.now();
   const browser = await getBrowser();
   const ctx = await browser.newContext({
     userAgent: DEFAULT_HUMAN_UA,
-    viewport: { width: opts.viewportWidth ?? 1280, height: opts.viewportHeight ?? 800 },
+    viewport: {
+      width: opts.viewportWidth ?? 1280,
+      height: opts.viewportHeight ?? 800,
+    },
   });
   const page = await ctx.newPage();
   let status = 0;
   let responseHeaders: Record<string, string> = {};
   try {
-    const resp = await page.goto(url, { waitUntil: "networkidle", timeout: 20000 });
+    const resp = await page.goto(url, {
+      waitUntil: "networkidle",
+      timeout: 20000,
+    });
     status = resp?.status() ?? 0;
     if (resp) {
       responseHeaders = resp.headers();
     }
     const renderedHtml = await page.content();
     const renderedText = await page.evaluate(() => {
-      return document.body ? (document.body.innerText || "") : "";
+      return document.body ? document.body.innerText || "" : "";
     });
     const links: string[] = await page.evaluate(() => {
       const out: string[] = [];
