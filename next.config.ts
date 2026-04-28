@@ -1,5 +1,8 @@
 import type { NextConfig } from "next";
 
+console.log("token", process.env.VERCEL_TOKEN);
+console.log("access token", process.env.VERCEL_ACCESS_TOKEN);
+
 const nextConfig: NextConfig = {
   reactCompiler: true,
   serverExternalPackages: [

@@ -27,9 +27,6 @@ export const metadata: Metadata = {
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  console.log("token", process.env.VERCEL_TOKEN);
-  console.log("access token", process.env.VERCEL_ACCESS_TOKEN);
-
   return (
     <html
       lang="en"
