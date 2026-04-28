@@ -24,13 +24,26 @@ export const metadata: Metadata = {
     "Audit any website for AI / LLM compatibility (GEO). Per-page and site-wide reports with actionable, industry-specific fixes.",
 };
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+export default function RootLayout({
+  children,
+}: Readonly<{ children: React.ReactNode }>) {
+  console.log("token", process.env.VERCEL_TOKEN);
+  console.log("access token", process.env.VERCEL_ACCESS_TOKEN);
+
   return (
     <html
       lang="en"
-      className={cn("h-full antialiased", sans.variable, serif.variable, mono.variable, "font-sans")}
+      className={cn(
+        "h-full antialiased",
+        sans.variable,
+        serif.variable,
+        mono.variable,
+        "font-sans",
+      )}
     >
-      <body className="min-h-full flex flex-col bg-background text-foreground">{children}</body>
+      <body className="min-h-full flex flex-col bg-background text-foreground">
+        {children}
+      </body>
     </html>
   );
 }
