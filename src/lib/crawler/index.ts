@@ -10,6 +10,8 @@ import type { Industry, PageData, SiteData } from "../types";
 export interface CrawlOptions {
   maxPages?: number;
   maxDepth?: number;
+  /** max number of pages to fetch/render concurrently */
+  maxConcurrency?: number;
   industry?: Industry;
   /** capture a viewport screenshot for the homepage (used by the regenerator preview) */
   screenshotHomepage?: boolean;
@@ -23,7 +25,9 @@ export type CrawlEvent =
   | { type: "page:start"; url: string; index: number; total: number }
   | { type: "page:done"; url: string; statusCode: number }
   | { type: "page:error"; url: string; error: string }
-  | { type: "site:done"; pages: number };
+  | { type: "site:done"; pages: number }
+  | { type: "site:analyzer:start"; payload: { key: string } }
+  | { type: "page:analyzer:start"; payload: { url: string; key: string } };
 
 interface CrawlOutcome {
   siteData: SiteData;
@@ -35,9 +39,16 @@ interface CrawlOutcome {
 
 export async function crawlSite(
   inputUrl: string,
-  opts: CrawlOptions = {}
+  opts: CrawlOptions = {},
 ): Promise<CrawlOutcome> {
-  const { maxPages = 25, maxDepth = 3, industry: forcedIndustry, screenshotHomepage, onProgress } = opts;
+  const {
+    maxPages = 25,
+    maxDepth = 3,
+    maxConcurrency = 4,
+    industry: forcedIndustry,
+    screenshotHomepage,
+    onProgress,
+  } = opts;
   const errors: string[] = [];
   const rootUrl = normalizeUrl(inputUrl);
   onProgress?.({ type: "site:start", rootUrl });
@@ -46,27 +57,34 @@ export async function crawlSite(
   const origin = u.origin;
   const domain = u.hostname;
 
-  const homepage = await fetchText(rootUrl);
+  const homepagePromise = fetchText(rootUrl);
+  const robotsPromise = fetchText(`${origin}/robots.txt`);
+  const llmsPromise = fetchText(`${origin}/llms.txt`);
+  const llmsFullPromise = fetchText(`${origin}/llms-full.txt`);
+  const httpPromise = fetchText(rootUrl.replace(/^https:/, "http:"), {
+    timeoutMs: 8000,
+  });
+
+  const [homepage, robotsRes, llmsRes, llmsFullRes, httpRes] =
+    await Promise.all([
+      homepagePromise,
+      robotsPromise,
+      llmsPromise,
+      llmsFullPromise,
+      httpPromise,
+    ]);
   if (!homepage.ok && homepage.status === 0) {
     errors.push(`Homepage fetch failed: ${homepage.error ?? "unknown"}`);
   }
-
-  const robotsRes = await fetchText(`${origin}/robots.txt`);
   const robotsTxt = robotsRes.ok ? robotsRes.body : null;
   onProgress?.({ type: "site:robots", ok: !!robotsTxt });
-
-  const llmsRes = await fetchText(`${origin}/llms.txt`);
   const llmsTxt = llmsRes.ok ? llmsRes.body : null;
-  const llmsFullRes = await fetchText(`${origin}/llms-full.txt`);
   const llmsFullTxt = llmsFullRes.ok ? llmsFullRes.body : null;
 
   const sm = await discoverSitemapUrls(rootUrl, robotsTxt);
   onProgress?.({ type: "site:sitemap", count: sm.urls.length });
 
   // canonical: did http→https redirect & www match
-  const httpRes = await fetchText(rootUrl.replace(/^https:/, "http:"), {
-    timeoutMs: 8000,
-  });
   const redirectsHttps =
     httpRes.finalUrl.startsWith("https://") || httpRes.status === 0;
 
@@ -116,58 +134,67 @@ export async function crawlSite(
   let idx = 0;
   let homepageScreenshot: string | undefined;
 
-  while (queue.length > 0 && pages.length < maxPages) {
-    const { url, depth } = queue.shift()!;
-    if (visited.has(url)) continue;
-    visited.add(url);
-    if (depth > maxDepth) continue;
-    if (!isHtmlUrl(url) || !sameDomain(url, rootUrl)) continue;
+  const concurrency = Math.max(1, Math.min(maxConcurrency, maxPages));
+  const worker = async () => {
+    while (queue.length > 0 && pages.length < maxPages) {
+      const next = queue.shift();
+      if (!next) return;
+      const { url, depth } = next;
+      if (visited.has(url)) continue;
+      visited.add(url);
+      if (depth > maxDepth) continue;
+      if (!isHtmlUrl(url) || !sameDomain(url, rootUrl)) continue;
 
-    idx++;
-    onProgress?.({ type: "page:start", url, index: idx, total: maxPages });
+      idx++;
+      onProgress?.({ type: "page:start", url, index: idx, total: maxPages });
 
-    try {
-      const raw = await fetchRaw(url);
-      const wantShot = !!screenshotHomepage && url === rootUrl;
-      const rendered = await renderPage(url, { screenshot: wantShot });
-      if (rendered.screenshotBase64 && !homepageScreenshot) {
-        homepageScreenshot = rendered.screenshotBase64;
-      }
-      const statusCode = rendered.status || raw.status;
+      try {
+        const raw = await fetchRaw(url);
+        const wantShot = !!screenshotHomepage && url === rootUrl;
+        const rendered = await renderPage(url, { screenshot: wantShot });
+        if (rendered.screenshotBase64 && !homepageScreenshot) {
+          homepageScreenshot = rendered.screenshotBase64;
+        }
+        const statusCode = rendered.status || raw.status;
 
-      const html = rendered.renderedHtml || raw.body;
-      const text =
-        rendered.renderedText ||
-        cheerio.load(raw.body).root().text().replace(/\s+/g, " ").trim();
+        const html = rendered.renderedHtml || raw.body;
+        const text =
+          rendered.renderedText ||
+          cheerio.load(raw.body).root().text().replace(/\s+/g, " ").trim();
 
-      const pageData: PageData = {
-        url,
-        statusCode,
-        rawHtml: raw.body,
-        renderedHtml: html,
-        renderedText: text,
-        responseHeaders: { ...raw.headers, ...rendered.responseHeaders },
-        loadTimeMs: rendered.loadTimeMs || raw.durationMs,
-        industry: siteData.industry,
-      };
-      pages.push(pageData);
-      onProgress?.({ type: "page:done", url, statusCode });
+        if (pages.length < maxPages) {
+          const pageData: PageData = {
+            url,
+            statusCode,
+            rawHtml: raw.body,
+            renderedHtml: html,
+            renderedText: text,
+            responseHeaders: { ...raw.headers, ...rendered.responseHeaders },
+            loadTimeMs: rendered.loadTimeMs || raw.durationMs,
+            industry: siteData.industry,
+          };
+          pages.push(pageData);
+        }
+        onProgress?.({ type: "page:done", url, statusCode });
 
-      // discover more links
-      if (depth < maxDepth) {
-        const found = extractInternalLinks(rendered.links, rootUrl);
-        for (const f of found) {
-          if (!visited.has(f) && pages.length + queue.length < maxPages * 2) {
-            queue.push({ url: f, depth: depth + 1 });
+        // discover more links
+        if (depth < maxDepth && pages.length < maxPages) {
+          const found = extractInternalLinks(rendered.links, rootUrl);
+          for (const f of found) {
+            if (!visited.has(f) && pages.length + queue.length < maxPages * 2) {
+              queue.push({ url: f, depth: depth + 1 });
+            }
           }
         }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        errors.push(`${url}: ${msg}`);
+        onProgress?.({ type: "page:error", url, error: msg });
       }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      errors.push(`${url}: ${msg}`);
-      onProgress?.({ type: "page:error", url, error: msg });
     }
-  }
+  };
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
   await closeBrowser().catch(() => {});
   onProgress?.({ type: "site:done", pages: pages.length });
@@ -201,7 +228,8 @@ function collectTypes(node: unknown, out: string[]) {
   const obj = node as Record<string, unknown>;
   const t = obj["@type"];
   if (typeof t === "string") out.push(t);
-  else if (Array.isArray(t)) t.forEach((x) => typeof x === "string" && out.push(x));
+  else if (Array.isArray(t))
+    t.forEach((x) => typeof x === "string" && out.push(x));
   for (const k of Object.keys(obj)) {
     const v = obj[k];
     if (v && typeof v === "object") collectTypes(v, out);

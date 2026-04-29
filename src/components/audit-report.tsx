@@ -50,14 +50,22 @@ export function AuditReportView({ report }: { report: AuditReport }) {
               <span>·</span>
               <span>{report.pagesAnalyzed} pages</span>
               <span>·</span>
-              <span>{report.siteChecks.length + report.pages.reduce((a, p) => a + p.checks.length, 0)} checks</span>
+              <span>
+                {report.siteChecks.length +
+                  report.pages.reduce((a, p) => a + p.checks.length, 0)}{" "}
+                checks
+              </span>
               <span>·</span>
               <span className="font-mono text-xs">
                 {new Date(report.completedAt).toLocaleString()}
               </span>
             </div>
           </div>
-          <ScoreRadial score={report.overallScore} grade={report.grade} size={180} />
+          <ScoreRadial
+            score={report.overallScore}
+            grade={report.grade}
+            size={180}
+          />
         </CardContent>
       </Card>
 
@@ -68,9 +76,13 @@ export function AuditReportView({ report }: { report: AuditReport }) {
           </CardHeader>
           <CardContent className="p-0">
             {report.siteChecks.length === 0 ? (
-              <div className="p-5 text-sm text-muted-foreground">No site-level checks ran.</div>
+              <div className="p-5 text-sm text-muted-foreground">
+                No site-level checks ran.
+              </div>
             ) : (
-              report.siteChecks.map((c, i) => <CheckResultRow key={i} check={c} report={report} />)
+              report.siteChecks.map((c) => (
+                <CheckResultRow key={c.rule} check={c} report={report} />
+              ))
             )}
           </CardContent>
         </Card>
@@ -93,10 +105,12 @@ export function AuditReportView({ report }: { report: AuditReport }) {
         </CardHeader>
         <CardContent className="p-0">
           {report.topRecommendations.length === 0 ? (
-            <div className="p-5 text-sm text-muted-foreground">Nothing major to fix. Nice.</div>
+            <div className="p-5 text-sm text-muted-foreground">
+              Nothing major to fix. Nice.
+            </div>
           ) : (
-            report.topRecommendations.map((c, i) => (
-              <CheckResultRow key={i} check={c} report={report} />
+            report.topRecommendations.map((c) => (
+              <CheckResultRow key={c.rule} check={c} report={report} />
             ))
           )}
         </CardContent>
@@ -119,7 +133,11 @@ export function AuditReportView({ report }: { report: AuditReport }) {
         </Card>
       )}
 
-      <RegenerateWizard report={report} open={regenOpen} onClose={() => setRegenOpen(false)} />
+      <RegenerateWizard
+        report={report}
+        open={regenOpen}
+        onClose={() => setRegenOpen(false)}
+      />
     </div>
   );
 }

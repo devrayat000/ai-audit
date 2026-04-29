@@ -1,11 +1,17 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
+import { start } from "workflow/api";
 import { isVerificationBypassed, verifyProof } from "@/lib/verification/token";
-import { runRegeneration } from "@/lib/regenerator";
+import { regenerationWorkflow } from "@/workflows/regen";
 import { getDomain, normalizeUrl } from "@/lib/utils/url";
+import {
+  newRunId,
+  writeRunStatus,
+  buildInitialStatus,
+} from "@/lib/workflow/status-store";
+import type { RegenInput } from "@/lib/regenerator/types";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
 const glossaryEntry = z.object({
@@ -24,13 +30,27 @@ const translationCfg = z.object({
   targetDirection: z.enum(["ltr", "rtl"]),
   targetFontFamily: z.string().optional(),
   glossary: z.array(glossaryEntry).default([]),
-  industry: z.enum(["restaurant", "travel", "service", "ecommerce", "blog", "general"]),
+  industry: z.enum([
+    "restaurant",
+    "travel",
+    "service",
+    "ecommerce",
+    "blog",
+    "general",
+  ]),
   humanReviewAcknowledged: z.boolean().optional(),
 });
 
 const schema = z.object({
   rootUrl: z.string().min(4),
-  industry: z.enum(["restaurant", "travel", "service", "ecommerce", "blog", "general"]),
+  industry: z.enum([
+    "restaurant",
+    "travel",
+    "service",
+    "ecommerce",
+    "blog",
+    "general",
+  ]),
   strategy: z.enum(["static-surgery", "next-project"]),
   proof: z.string().optional(),
   fixes: z.array(z.object({ analyzerKey: z.string(), enabled: z.boolean() })),
@@ -39,48 +59,51 @@ const schema = z.object({
   maxPages: z.number().int().min(1).max(50).optional(),
 });
 
-if (process.env.ENABLE_REGENERATION === undefined) {
-  // default-on for local dev
-}
-
 export async function POST(req: NextRequest) {
   if (process.env.ENABLE_REGENERATION === "false") {
-    return Response.json({ error: "Regeneration is disabled.", code: "DISABLED" }, { status: 503 });
+    return Response.json(
+      { error: "Regeneration is disabled.", code: "DISABLED" },
+      { status: 503 },
+    );
   }
   let body: unknown;
   try {
     body = await req.json();
   } catch {
-    return Response.json({ error: "Invalid JSON", code: "BAD_BODY" }, { status: 400 });
+    return Response.json(
+      { error: "Invalid JSON", code: "BAD_BODY" },
+      { status: 400 },
+    );
   }
   const parsed = schema.safeParse(body);
   if (!parsed.success) {
-    return Response.json({ error: parsed.error.message, code: "VALIDATION" }, { status: 400 });
+    return Response.json(
+      { error: parsed.error.message, code: "VALIDATION" },
+      { status: 400 },
+    );
   }
   const data = parsed.data;
   const rootUrl = normalizeUrl(data.rootUrl);
   const domain = getDomain(rootUrl).replace(/^www\./, "");
 
-  const bypass = isVerificationBypassed();
-  let v: { valid: boolean; method?: "dns-txt" | "meta-tag"; expiresAt?: number; reason?: string };
-  if (bypass) {
-    v = { valid: true, method: "meta-tag" };
-    console.warn(
-      `[regenerate] Verification BYPASSED for ${domain} — NODE_ENV=${process.env.NODE_ENV ?? "undefined"}, ALLOW_REGEN_WITHOUT_VERIFICATION=${process.env.ALLOW_REGEN_WITHOUT_VERIFICATION ?? "false"}. ` +
-        "This MUST NOT happen in production."
-    );
-  } else {
+  if (!isVerificationBypassed()) {
     if (!data.proof) {
       return Response.json(
-        { error: "Domain ownership proof is required in production.", code: "UNVERIFIED" },
-        { status: 403 }
+        {
+          error: "Domain ownership proof is required in production.",
+          code: "UNVERIFIED",
+        },
+        { status: 403 },
       );
     }
-    v = verifyProof(data.proof, domain);
+    const v = verifyProof(data.proof, domain);
     if (!v.valid) {
       return Response.json(
-        { error: `Domain ownership proof invalid: ${v.reason ?? "unknown"}.`, code: "UNVERIFIED" },
-        { status: 403 }
+        {
+          error: `Domain ownership proof invalid: ${v.reason ?? "unknown"}.`,
+          code: "UNVERIFIED",
+        },
+        { status: 403 },
       );
     }
   }
@@ -90,21 +113,21 @@ export async function POST(req: NextRequest) {
     return Response.json(
       {
         error:
-          "Human-review confirmation required for translated output. Re-submit with humanReviewAcknowledged=true after the user checks the confirmation box.",
+          "Human-review confirmation required for translated output. Re-submit with humanReviewAcknowledged=true.",
         code: "HUMAN_REVIEW_REQUIRED",
       },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
-  try {
-    const result = await runRegeneration({
-      rootUrl,
-      industry: data.industry,
-      strategy: data.strategy,
-      proof: data.proof,
-      fixes: data.fixes,
-      translation: tx && tx.mode !== "none"
+  const regenInput: RegenInput = {
+    rootUrl,
+    industry: data.industry,
+    strategy: data.strategy,
+    proof: data.proof,
+    fixes: data.fixes,
+    translation:
+      tx && tx.mode !== "none"
         ? {
             mode: tx.mode,
             sourceLanguage: tx.sourceLanguage,
@@ -117,35 +140,32 @@ export async function POST(req: NextRequest) {
             industry: tx.industry,
           }
         : undefined,
-      inlineAssets: data.inlineAssets,
-      maxPages: data.maxPages,
-    });
+    inlineAssets: data.inlineAssets,
+    maxPages: data.maxPages,
+  };
 
-    return Response.json({
-      strategy: result.strategy,
-      rootUrl: result.rootUrl,
-      domain: result.domain,
-      fixesApplied: result.fixesApplied,
-      pageDiffs: result.pageDiffs.map((d) => ({
-        url: d.url,
-        changes: d.changes.slice(0, 200),
-        beforeLines: d.before.split("\n").length,
-        afterLines: d.after.split("\n").length,
-      })),
-      homepagePreview: result.homepagePreview,
-      originalHomepageScreenshot: result.originalHomepageScreenshot,
-      translationWarnings: result.translationWarnings,
-      totalSizeBytes: result.totalSizeBytes,
-      durationMs: result.durationMs,
-      zipBase64: result.zipBase64,
-      notes: result.notes,
-      pages: result.files.filter((f) => f.path.endsWith(".html")).map((f) => f.path),
-      verifiedMethod: v.method,
+  const runId = newRunId();
+  // Pre-write a queued status so the client can immediately poll without 404s.
+  await writeRunStatus(
+    buildInitialStatus(runId, "regen", { rootUrl, industry: data.industry }),
+  );
+
+  try {
+    const run = await start(regenerationWorkflow, [runId, regenInput]);
+    return new Response(run.readable, {
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      },
     });
   } catch (e) {
     return Response.json(
-      { error: e instanceof Error ? e.message : "Regeneration failed", code: "REGEN_FAILED" },
-      { status: 500 }
+      {
+        error: e instanceof Error ? e.message : "Failed to start workflow",
+        code: "WORKFLOW_START_FAILED",
+      },
+      { status: 500 },
     );
   }
 }

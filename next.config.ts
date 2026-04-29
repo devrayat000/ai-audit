@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { withWorkflow } from "workflow/next";
 
 const nextConfig: NextConfig = {
   reactCompiler: true,
@@ -14,8 +15,10 @@ const nextConfig: NextConfig = {
     "franc-min",
     "rtl-detect",
     "@vercel/client",
+    "@vercel/blob",
+    "workflow",
   ],
   typescript: { ignoreBuildErrors: true },
 };
 
-export default nextConfig;
+export default withWorkflow(nextConfig);

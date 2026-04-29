@@ -3,18 +3,21 @@
 import { useState } from "react";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
-import { CheckCircle2, ExternalLink, Loader2, Rocket, XCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  ExternalLink,
+  Loader2,
+  Rocket,
+  XCircle,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
+import type { RegenZipRef } from "@/lib/regenerator/types";
+
 interface Props {
-  zipBase64: string;
+  zip: RegenZipRef;
   projectNameSeed: string;
   acknowledged: boolean;
-}
-
-interface DeployEvent {
-  type: string;
-  payload?: unknown;
 }
 
 interface ProgressItem {
@@ -23,63 +26,48 @@ interface ProgressItem {
   ts: number;
 }
 
-const NICE_LABELS: Record<string, string> = {
-  preparing: "Decoding bundle",
-  prepared: "Bundle ready",
-  "deploy-started": "Talking to Vercel",
-  "hashes-calculated": "Hashing files",
-  "file-count": "Counting files",
-  "file-uploaded": "Uploading file",
-  "files-uploaded": "Files uploaded",
-  created: "Deployment created",
-  building: "Building",
-  ready: "Ready",
-  "alias-assigned": "Alias assigned",
-  error: "Error",
-  canceled: "Canceled",
-  warning: "Warning",
-  notice: "Notice",
-  tip: "Tip",
-  done: "Finished",
-};
-
 function pickUrl(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") return null;
   const p = payload as Record<string, unknown>;
-  if (typeof p.url === "string") return p.url.startsWith("http") ? p.url : `https://${p.url}`;
+  if (typeof p.url === "string")
+    return p.url.startsWith("http") ? p.url : `https://${p.url}`;
   if (typeof p.alias === "string") return `https://${p.alias}`;
-  if (Array.isArray(p.alias) && typeof p.alias[0] === "string") return `https://${p.alias[0]}`;
+  if (Array.isArray(p.alias) && typeof p.alias[0] === "string")
+    return `https://${p.alias[0]}`;
   if (p.deployment && typeof p.deployment === "object") {
     return pickUrl(p.deployment);
   }
   return null;
 }
 
-function describe(ev: DeployEvent): string {
-  const label = NICE_LABELS[ev.type] ?? ev.type;
-  const p = ev.payload as Record<string, unknown> | undefined;
-  if (ev.type === "file-uploaded" && p && typeof p.file === "string") {
-    return `Uploaded ${p.file}`;
-  }
-  if (ev.type === "file-count" && p && typeof p.total === "number") {
-    return `Counting files (${p.total})`;
-  }
-  if (ev.type === "prepared" && p && typeof p.fileCount === "number") {
-    return `Bundle ready (${p.fileCount} files)`;
-  }
-  if (ev.type === "deploy-started" && p && typeof p.projectName === "string") {
-    return `Deploying as "${p.projectName}"`;
-  }
-  if (ev.type === "error" && p && typeof p.message === "string") {
-    return `Error: ${p.message}`;
-  }
-  if (ev.type === "ready") {
-    return "Deployment ready";
-  }
-  return label;
+function isDoneLine(line: string): boolean {
+  return line === "[DONE]" || line === "data: [DONE]";
 }
 
-export function DeployToVercel({ zipBase64, projectNameSeed, acknowledged }: Props) {
+function parseStreamLine(line: string): unknown | null {
+  if (!line) return null;
+  if (line.startsWith(":")) return null;
+  const payload = line.startsWith("data:") ? line.slice(5).trim() : line;
+  if (!payload || payload === "[DONE]") return null;
+  try {
+    return JSON.parse(payload);
+  } catch {
+    return null;
+  }
+}
+
+function isDeployStreamStatus(value: unknown): value is {
+  state?: string;
+  message?: string;
+  progress?: number;
+  meta?: unknown;
+  result?: unknown;
+  error?: unknown;
+} {
+  return !!value && typeof value === "object";
+}
+
+export function DeployToVercel({ zip, projectNameSeed, acknowledged }: Props) {
   const [busy, setBusy] = useState(false);
   const [events, setEvents] = useState<ProgressItem[]>([]);
   const [deploymentUrl, setDeploymentUrl] = useState<string | null>(null);
@@ -93,51 +81,90 @@ export function DeployToVercel({ zipBase64, projectNameSeed, acknowledged }: Pro
     setErrorMsg(null);
     setDone(false);
     try {
+      const payload = zip.url
+        ? { zipUrl: zip.url, projectNameSeed }
+        : { zipBase64: zip.base64, projectNameSeed };
       const r = await fetch("/api/regenerate/deploy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ zipBase64, projectNameSeed }),
+        body: JSON.stringify(payload),
       });
-      if (!r.ok || !r.body) {
+      if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         setErrorMsg(j.error ?? `Deploy request failed (${r.status})`);
         setBusy(false);
         return;
       }
+      if (!r.body) {
+        setErrorMsg("No response stream from deploy.");
+        return;
+      }
       const reader = r.body.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      while (true) {
-        const { done: end, value } = await reader.read();
-        if (end) break;
-        buf += dec.decode(value, { stream: true });
-        const parts = buf.split("\n\n");
-        buf = parts.pop() ?? "";
-        for (const part of parts) {
-          const line = part.split("\n").find((l) => l.startsWith("data: "));
-          if (!line) continue;
-          const json = line.slice(6);
-          let ev: DeployEvent;
-          try {
-            ev = JSON.parse(json) as DeployEvent;
-          } catch {
-            continue;
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finished = false;
+      let lastMessage = "";
+
+      while (!finished) {
+        const { value, done: streamDone } = await reader.read();
+        if (streamDone) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx = buffer.indexOf("\n");
+        while (idx >= 0) {
+          const line = buffer.slice(0, idx).trim();
+          buffer = buffer.slice(idx + 1);
+          if (isDoneLine(line)) {
+            finished = true;
+            break;
           }
-          setEvents((prev) => [...prev, { type: ev.type, message: describe(ev), ts: Date.now() }]);
-          if (ev.type === "error") {
-            const msg =
-              ev.payload && typeof ev.payload === "object" && "message" in (ev.payload as object)
-                ? String((ev.payload as { message: unknown }).message)
-                : "Vercel reported an error";
-            setErrorMsg(msg);
+          const payload = parseStreamLine(line);
+          if (payload && isDeployStreamStatus(payload)) {
+            const message =
+              typeof payload.message === "string"
+                ? payload.message
+                : "Working…";
+            const meta =
+              payload.meta && typeof payload.meta === "object"
+                ? (payload.meta as Record<string, unknown>)
+                : undefined;
+            const type =
+              typeof meta?.type === "string"
+                ? meta.type
+                : typeof payload.state === "string"
+                  ? payload.state
+                  : "notice";
+            if (message !== lastMessage) {
+              setEvents((prev) => [...prev, { type, message, ts: Date.now() }]);
+              lastMessage = message;
+            }
+            const maybeUrl = pickUrl(meta ?? payload.result);
+            if (maybeUrl) setDeploymentUrl(maybeUrl);
+            if (payload.state === "completed") {
+              if (payload.result && typeof payload.result === "object") {
+                const result = payload.result as Record<string, unknown>;
+                if (typeof result.deploymentUrl === "string") {
+                  setDeploymentUrl(result.deploymentUrl);
+                }
+              }
+              setDone(true);
+              finished = true;
+              break;
+            }
+            if (payload.state === "failed") {
+              setErrorMsg(
+                typeof payload.error === "string"
+                  ? payload.error
+                  : "Deploy failed",
+              );
+              finished = true;
+              break;
+            }
           }
-          const maybeUrl = pickUrl(ev.payload);
-          if (maybeUrl && (ev.type === "ready" || ev.type === "alias-assigned" || ev.type === "created")) {
-            setDeploymentUrl(maybeUrl);
-          }
-          if (ev.type === "done") setDone(true);
+          idx = buffer.indexOf("\n");
         }
       }
+
+      if (finished) await reader.cancel();
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : "Network error");
     } finally {
@@ -162,14 +189,23 @@ export function DeployToVercel({ zipBase64, projectNameSeed, acknowledged }: Pro
           )}
         </div>
         <p className="text-sm text-muted-foreground">
-          Deploys the regenerated bundle to a fresh Vercel project under the configured account.
+          Deploys the regenerated bundle to a fresh Vercel project under the
+          configured account.
         </p>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex flex-wrap items-center gap-3">
           <Button onClick={run} disabled={!acknowledged || busy} size="lg">
-            {busy ? <Loader2 className="size-4 animate-spin" /> : <Rocket className="size-4" />}
-            {busy ? "Deploying…" : deploymentUrl ? "Re-deploy" : "Deploy to Vercel"}
+            {busy ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Rocket className="size-4" />
+            )}
+            {busy
+              ? "Deploying…"
+              : deploymentUrl
+                ? "Re-deploy"
+                : "Deploy to Vercel"}
           </Button>
           {!acknowledged && (
             <span className="text-xs text-muted-foreground">
@@ -186,10 +222,13 @@ export function DeployToVercel({ zipBase64, projectNameSeed, acknowledged }: Pro
                 className={cn(
                   "flex items-start gap-2",
                   e.type === "error" && "text-danger",
-                  (e.type === "ready" || e.type === "alias-assigned") && "text-success",
+                  (e.type === "ready" || e.type === "alias-assigned") &&
+                    "text-success",
                 )}
               >
-                <span className="opacity-60 shrink-0">[{new Date(e.ts).toLocaleTimeString()}]</span>
+                <span className="opacity-60 shrink-0">
+                  [{new Date(e.ts).toLocaleTimeString()}]
+                </span>
                 <span>{e.message}</span>
               </div>
             ))}
@@ -208,7 +247,12 @@ export function DeployToVercel({ zipBase64, projectNameSeed, acknowledged }: Pro
             <CheckCircle2 className="size-4 mt-0.5 shrink-0" />
             <span>
               Live at{" "}
-              <a href={deploymentUrl} target="_blank" rel="noreferrer" className="underline">
+              <a
+                href={deploymentUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="underline"
+              >
                 {deploymentUrl}
               </a>
             </span>

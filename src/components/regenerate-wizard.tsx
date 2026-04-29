@@ -44,7 +44,8 @@ interface RegenResponse {
   homepagePreview: string;
   originalHomepageScreenshot?: string;
   translationWarnings: import("@/lib/regenerator/types").TranslationWarning[];
-  zipBase64: string;
+  zip: import("@/lib/regenerator/types").RegenZipRef;
+  totalSizeBytes: number;
   durationMs: number;
   notes: string[];
 }
@@ -54,12 +55,6 @@ const DEV_BYPASS =
   process.env.NEXT_PUBLIC_ALLOW_REGEN_WITHOUT_VERIFICATION === "true";
 
 export function RegenerateWizard({ report, open, onClose }: Props) {
-  const domain = useMemo(
-    () => getDomain(report.rootUrl).replace(/^www\./, ""),
-    [report.rootUrl],
-  );
-  const rootUrl = useMemo(() => normalizeUrl(report.rootUrl), [report.rootUrl]);
-
   const [verified, setVerified] = useState<VerifiedState | null>(
     DEV_BYPASS
       ? () => ({
@@ -95,7 +90,11 @@ export function RegenerateWizard({ report, open, onClose }: Props) {
   const [result, setResult] = useState<RegenResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  if (!open) return null;
+  const domain = useMemo(
+    () => getDomain(report.rootUrl).replace(/^www\./, ""),
+    [report.rootUrl],
+  );
+  const rootUrl = useMemo(() => normalizeUrl(report.rootUrl), [report.rootUrl]);
 
   const finalGlossary = glossaryOverride ?? translation?.glossary ?? [];
   const translationCfg: TranslationConfig | null = translation
@@ -112,11 +111,17 @@ export function RegenerateWizard({ report, open, onClose }: Props) {
           translationCfg.mode === "bilingual"))) &&
     !running;
 
+  const [progress, setProgress] = useState<{
+    message: string;
+    pct?: number;
+  } | null>(null);
+
   const start = async () => {
     if (!verified) return;
     setRunning(true);
     setError(null);
     setResult(null);
+    setProgress({ message: "Starting workflow…" });
     try {
       const r = await fetch("/api/regenerate/start", {
         method: "POST",
@@ -138,18 +143,89 @@ export function RegenerateWizard({ report, open, onClose }: Props) {
           inlineAssets: false,
         }),
       });
-      const j = await r.json();
       if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
         setError(j.error ?? `Regeneration failed (${r.status})`);
-      } else {
-        setResult(j as RegenResponse);
+        setRunning(false);
+        return;
       }
+      if (!r.body) {
+        setError("No response stream from regeneration.");
+        setRunning(false);
+        return;
+      }
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finished = false;
+      let finalResult: RegenResponse | null = null;
+      let finalError: string | null = null;
+
+      while (!finished) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx = buffer.indexOf("\n");
+        while (idx >= 0) {
+          const line = buffer.slice(0, idx).trim();
+          buffer = buffer.slice(idx + 1);
+          if (isDoneLine(line)) {
+            finished = true;
+            break;
+          }
+          const payload = parseStreamLine(line);
+          if (payload && isRegenStreamStatus(payload)) {
+            const nextMessage =
+              typeof payload.message === "string" ? payload.message : undefined;
+            const nextPct =
+              typeof payload.progress === "number"
+                ? payload.progress
+                : undefined;
+            if (nextMessage || typeof nextPct === "number") {
+              setProgress((prev) => ({
+                message: nextMessage ?? prev?.message ?? "Running",
+                pct: typeof nextPct === "number" ? nextPct : prev?.pct,
+              }));
+            }
+            if (payload.state === "completed") {
+              if (payload.result) finalResult = payload.result as RegenResponse;
+              finished = true;
+              break;
+            }
+            if (payload.state === "failed") {
+              finalError =
+                typeof payload.error === "string"
+                  ? payload.error
+                  : "Workflow reported failure.";
+              finished = true;
+              break;
+            }
+          }
+          idx = buffer.indexOf("\n");
+        }
+      }
+
+      if (finished) await reader.cancel();
+
+      if (finalResult) {
+        setResult(finalResult);
+        setRunning(false);
+        return;
+      }
+      if (finalError) {
+        setError(finalError);
+        setRunning(false);
+        return;
+      }
+      setError("Regeneration stream ended without result.");
+      setRunning(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Network error");
-    } finally {
       setRunning(false);
     }
   };
+
+  if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm overflow-y-auto">
@@ -280,21 +356,46 @@ export function RegenerateWizard({ report, open, onClose }: Props) {
                   </Card>
                 )}
 
-                <div className="flex items-center justify-end gap-3">
-                  {error && <p className="text-sm text-danger">{error}</p>}
-                  <Button
-                    type="button"
-                    size="lg"
-                    onClick={start}
-                    disabled={!canRun || (translateEnabled && !humanAck)}
-                  >
-                    {running ? (
-                      <Loader2 className="size-4 animate-spin" />
-                    ) : (
-                      <Rocket className="size-4" />
-                    )}
-                    {running ? "Regenerating…" : "Start regeneration"}
-                  </Button>
+                <div className="flex flex-col gap-3">
+                  {running && progress && (
+                    <Card>
+                      <CardContent className="p-4 space-y-2">
+                        <div className="flex items-center gap-2 text-sm">
+                          <Loader2 className="size-4 animate-spin" />
+                          <span>{progress.message}</span>
+                          {typeof progress.pct === "number" && (
+                            <span className="ml-auto font-mono text-xs text-muted-foreground">
+                              {progress.pct}%
+                            </span>
+                          )}
+                        </div>
+                        {typeof progress.pct === "number" && (
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                            <div
+                              className="h-full rounded-full bg-foreground transition-[width] duration-500"
+                              style={{ width: `${Math.max(2, progress.pct)}%` }}
+                            />
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  )}
+                  <div className="flex items-center justify-end gap-3">
+                    {error && <p className="text-sm text-danger">{error}</p>}
+                    <Button
+                      type="button"
+                      size="lg"
+                      onClick={start}
+                      disabled={!canRun || (translateEnabled && !humanAck)}
+                    >
+                      {running ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Rocket className="size-4" />
+                      )}
+                      {running ? "Regenerating…" : "Start regeneration"}
+                    </Button>
+                  </div>
                 </div>
               </>
             )}
@@ -318,6 +419,33 @@ export function RegenerateWizard({ report, open, onClose }: Props) {
       </div>
     </div>
   );
+}
+
+function isDoneLine(line: string): boolean {
+  return line === "[DONE]" || line === "data: [DONE]";
+}
+
+function parseStreamLine(line: string): unknown | null {
+  if (!line) return null;
+  if (line.startsWith(":")) return null;
+  const payload = line.startsWith("data:") ? line.slice(5).trim() : line;
+  if (!payload || payload === "[DONE]") return null;
+  try {
+    return JSON.parse(payload);
+  } catch {
+    return null;
+  }
+}
+
+function isRegenStreamStatus(value: unknown): value is {
+  state?: string;
+  message?: string;
+  progress?: number;
+  meta?: unknown;
+  result?: unknown;
+  error?: unknown;
+} {
+  return !!value && typeof value === "object";
 }
 
 function ResultView({
@@ -388,19 +516,19 @@ function ResultView({
         </CardHeader>
         <CardContent>
           <DeployButtons
-            zipBase64={result.zipBase64}
+            zip={result.zip}
             fileName={`${domain}-ai-audit-regen.zip`}
             acknowledged={!translateEnabled || humanAck}
           />
           <p className="text-xs text-muted-foreground mt-2">
-            Tip: drop the unzipped folder onto Netlify Drop, or use the one-click
-            Vercel deploy below.
+            Tip: drop the unzipped folder onto Netlify Drop, or use the
+            one-click Vercel deploy below.
           </p>
         </CardContent>
       </Card>
 
       <DeployToVercel
-        zipBase64={result.zipBase64}
+        zip={result.zip}
         projectNameSeed={domain}
         acknowledged={!translateEnabled || humanAck}
       />

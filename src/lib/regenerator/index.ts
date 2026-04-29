@@ -42,8 +42,20 @@ import type {
   RegenFile,
   RegenInput,
   RegenResult,
+  RegenZipRef,
   TranslationWarning,
 } from "./types";
+import { isBlobConfigured, uploadZip } from "../storage/blob";
+
+export interface RegenProgressEvent {
+  type:
+    | "phase"
+    | "phase-done"
+    | "phase-warn"
+    | "page-start"
+    | "page-done";
+  payload?: Record<string, unknown>;
+}
 
 interface ClaudeClient {
   messages: {
@@ -165,8 +177,27 @@ async function loadAnthropic(apiKey: string): Promise<ClaudeClient | null> {
   }
 }
 
-export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
+export interface RunRegenerationOptions {
+  onProgress?: (event: RegenProgressEvent) => void | Promise<void>;
+}
+
+export async function runRegeneration(
+  input: RegenInput,
+  opts: RunRegenerationOptions = {},
+): Promise<RegenResult> {
   const t0 = Date.now();
+  const emit = (event: RegenProgressEvent) => {
+    try {
+      const r = opts.onProgress?.(event);
+      if (r && typeof (r as Promise<void>).then === "function") {
+        // fire-and-forget; don't let progress writes slow the pipeline
+        (r as Promise<void>).catch(() => {});
+      }
+    } catch {
+      // ignore
+    }
+  };
+
   const apiKey = process.env.ANTHROPIC_API_KEY ?? "";
   const claude = await loadAnthropic(apiKey);
   const copyLlm = makeCopyLlm(claude);
@@ -180,20 +211,22 @@ export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
   const warnings: TranslationWarning[] = [];
   const pageDiffs = [];
 
-  // Fresh crawl (we don't persist audit data; on-the-fly).
+  // Phase 1: crawl
+  emit({ type: "phase", payload: { name: "crawl", message: "Crawling site for regeneration…" } });
   notes.push("Crawling site for regeneration…");
-  const { siteData, pages, errors, homepageScreenshot } = await crawlSite(
-    input.rootUrl,
-    {
-      industry: input.industry,
-      maxPages: Math.min(
-        input.maxPages ?? 12,
-        Number(process.env.MAX_REGEN_PAGES ?? 50),
-      ),
-      screenshotHomepage: true,
-    },
-  );
+  const { siteData, pages, errors, homepageScreenshot } = await crawlSite(input.rootUrl, {
+    industry: input.industry,
+    maxPages: Math.min(
+      input.maxPages ?? 12,
+      Number(process.env.MAX_REGEN_PAGES ?? 50),
+    ),
+    screenshotHomepage: true,
+  });
   notes.push(...errors.slice(0, 5).map((e) => `crawl: ${e}`));
+  emit({
+    type: "phase-done",
+    payload: { name: "crawl", pagesCrawled: pages.length },
+  });
 
   if (pages.length === 0) {
     throw new Error("No pages could be crawled.");
@@ -214,7 +247,17 @@ export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
       ? `/${translation.targetLanguage}`
       : "";
 
+  emit({
+    type: "phase",
+    payload: { name: "transform", total: pages.length, message: "Applying GEO fixes per page…" },
+  });
+  let pageIdx = 0;
   for (const page of pages) {
+    pageIdx++;
+    emit({
+      type: "page-start",
+      payload: { url: page.url, index: pageIdx, total: pages.length },
+    });
     const before = page.renderedHtml || page.rawHtml;
     let html = before;
 
@@ -440,7 +483,12 @@ export async function runRegeneration(input: RegenInput): Promise<RegenResult> {
     if (page.url === homepage.url) {
       homepagePreview = afterForDiff;
     }
+    emit({
+      type: "page-done",
+      payload: { url: page.url, index: pageIdx, total: pages.length },
+    });
   }
+  emit({ type: "phase-done", payload: { name: "transform" } });
 
   // Site-level files (always at root). For bilingual, sitemap merges both.
   if (fixSet.has("ai-bot-access")) {
@@ -545,13 +593,56 @@ export function ${c.name}() {
     }
   }
 
+  // Phase 3: bundle
+  emit({ type: "phase", payload: { name: "bundle", message: "Bundling files into zip…" } });
   const { bytes, totalUncompressed } = await bundleZip(files);
+  emit({
+    type: "phase-done",
+    payload: { name: "bundle", sizeBytes: totalUncompressed },
+  });
+
+  // Phase 4: upload to Vercel Blob (large bundles must not be base64-inlined
+  // through the serverless response; that hits Vercel's body-size cap fast).
+  const seed = (siteData.domain || "regen").replace(/[^a-z0-9-]+/gi, "-");
+  let zipRef: RegenZipRef;
+  if (isBlobConfigured()) {
+    emit({ type: "phase", payload: { name: "upload", message: "Uploading bundle to Vercel Blob…" } });
+    try {
+      const uploaded = await uploadZip(bytes, seed);
+      zipRef = {
+        url: uploaded.url,
+        pathname: uploaded.pathname,
+        sizeBytes: uploaded.sizeBytes,
+      };
+      emit({
+        type: "phase-done",
+        payload: { name: "upload", url: uploaded.url, sizeBytes: uploaded.sizeBytes },
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      notes.push(`Blob upload failed: ${msg}. Falling back to inline base64.`);
+      emit({ type: "phase-warn", payload: { name: "upload", message: msg } });
+      zipRef = {
+        url: "",
+        pathname: "",
+        sizeBytes: bytes.byteLength,
+        base64: Buffer.from(bytes).toString("base64"),
+      };
+    }
+  } else {
+    notes.push("Vercel Blob is not configured — embedding zip as inline base64. Add BLOB_READ_WRITE_TOKEN for large bundles.");
+    zipRef = {
+      url: "",
+      pathname: "",
+      sizeBytes: bytes.byteLength,
+      base64: Buffer.from(bytes).toString("base64"),
+    };
+  }
 
   return {
     strategy: input.strategy,
     rootUrl: input.rootUrl,
     domain: siteData.domain,
-    files,
     fixesApplied: [...fixesApplied],
     pageDiffs,
     homepagePreview,
@@ -559,7 +650,7 @@ export function ${c.name}() {
     translationWarnings: warnings,
     totalSizeBytes: totalUncompressed,
     durationMs: Date.now() - t0,
-    zipBase64: Buffer.from(bytes).toString("base64"),
+    zip: zipRef,
     notes,
   };
 }

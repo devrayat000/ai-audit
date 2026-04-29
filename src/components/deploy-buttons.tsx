@@ -2,35 +2,43 @@
 
 import { Button } from "./ui/button";
 import { Download, ExternalLink } from "lucide-react";
+import type { RegenZipRef } from "@/lib/regenerator/types";
 
 interface Props {
-  zipBase64: string;
+  zip: RegenZipRef;
   fileName: string;
   acknowledged: boolean;
 }
 
-async function base64ToBlob(b64: string): Promise<Blob> {
-  // 1. Remove any whitespace or newlines that might have been added during transport
-  const cleanB64 = b64.replace(/\s/g, "");
-
-  // 2. Ensure it doesn't already have the prefix before adding it
-  const dataUri = cleanB64.startsWith("data:")
-    ? cleanB64
-    : `data:application/zip;base64,${cleanB64}`;
-  const response = await fetch(dataUri);
-  return await response.blob();
+function base64ToBlob(b64: string): Blob {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: "application/zip" });
 }
 
-export function DeployButtons({ zipBase64, fileName, acknowledged }: Props) {
-  const download = async () => {
+export function DeployButtons({ zip, fileName, acknowledged }: Props) {
+  const download = () => {
     if (!acknowledged) return;
-    const blob = await base64ToBlob(zipBase64);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = fileName;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    if (zip.url) {
+      // Blob URL is public — let the browser download direct from CDN.
+      const a = document.createElement("a");
+      a.href = zip.url;
+      a.download = fileName;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.click();
+      return;
+    }
+    if (zip.base64) {
+      const blob = base64ToBlob(zip.base64);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }
   };
 
   return (
@@ -38,14 +46,15 @@ export function DeployButtons({ zipBase64, fileName, acknowledged }: Props) {
       <Button onClick={download} disabled={!acknowledged} size="lg">
         <Download className="size-4" />
         Download .zip
+        <span className="ml-2 text-xs opacity-70">
+          {(zip.sizeBytes / 1024).toFixed(0)} KB
+        </span>
       </Button>
       <Button
         variant="outline"
         size="lg"
         disabled={!acknowledged}
-        onClick={async () => {
-          window.open("https://app.netlify.com/drop", "_blank", "noopener");
-        }}
+        onClick={() => window.open("https://app.netlify.com/drop", "_blank", "noopener")}
       >
         <ExternalLink className="size-4" />
         Open Netlify Drop

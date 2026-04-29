@@ -76,11 +76,24 @@ export interface TranslationWarning {
   message: string;
 }
 
+export interface RegenZipRef {
+  /** Public URL on Vercel Blob (preferred). Empty when blob isn't configured. */
+  url: string;
+  /** Blob pathname for delete/cleanup later. */
+  pathname: string;
+  sizeBytes: number;
+  /**
+   * Inline base64 of the zip — only set when Vercel Blob isn't configured
+   * (dev fallback). In production this is always empty to keep response payloads
+   * within serverless body-size limits.
+   */
+  base64?: string;
+}
+
 export interface RegenResult {
   strategy: RegenStrategy;
   rootUrl: string;
   domain: string;
-  files: RegenFile[];
   fixesApplied: string[];
   pageDiffs: PageDiff[];
   homepagePreview: string;
@@ -89,7 +102,7 @@ export interface RegenResult {
   translationWarnings: TranslationWarning[];
   totalSizeBytes: number;
   durationMs: number;
-  zipBase64: string;
+  zip: RegenZipRef;
   notes: string[];
 }
 
