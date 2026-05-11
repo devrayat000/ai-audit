@@ -15,6 +15,7 @@ import {
 import { normalizeUrl } from "@/lib/utils/url";
 
 export const runtime = "nodejs";
+export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
 const schema = z.object({
@@ -37,11 +38,17 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json();
   } catch {
-    return Response.json({ error: "Invalid JSON", code: "BAD_BODY" }, { status: 400 });
+    return Response.json(
+      { error: "Invalid JSON", code: "BAD_BODY" },
+      { status: 400 },
+    );
   }
   const parsed = schema.safeParse(body);
   if (!parsed.success) {
-    return Response.json({ error: parsed.error.message, code: "VALIDATION" }, { status: 400 });
+    return Response.json(
+      { error: parsed.error.message, code: "VALIDATION" },
+      { status: 400 },
+    );
   }
 
   const sourceUrl = normalizeUrl(parsed.data.sourceUrl);
@@ -49,7 +56,10 @@ export async function POST(req: NextRequest) {
 
   if (!isValidSubdomain(subdomain)) {
     return Response.json(
-      { error: "Subdomain must be alphanumeric, may include dashes, and be 2–63 chars.", code: "BAD_SUBDOMAIN" },
+      {
+        error: "Subdomain must be alphanumeric, may include dashes, and be 2–63 chars.",
+        code: "BAD_SUBDOMAIN",
+      },
       { status: 400 },
     );
   }
@@ -83,7 +93,7 @@ export async function POST(req: NextRequest) {
   );
 
   try {
-    await start(publishSiteWorkflow, [
+    const run = await start(publishSiteWorkflow, [
       runId,
       {
         sourceUrl,
@@ -92,6 +102,15 @@ export async function POST(req: NextRequest) {
         audit: parsed.data.audit as never,
       },
     ]);
+    return new Response(run.readable, {
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Run-Id": runId,
+        "X-Subdomain": subdomain,
+      },
+    });
   } catch (e) {
     return Response.json(
       {
@@ -101,12 +120,4 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     );
   }
-
-  const apex = process.env.SITE_PUBLIC_APEX ?? "aivible.tokyo";
-  return Response.json({
-    runId,
-    kind: "publish",
-    subdomain,
-    plannedUrl: `https://${subdomain}.${apex}`,
-  });
 }

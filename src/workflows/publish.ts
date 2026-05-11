@@ -1,3 +1,4 @@
+import { getWritable } from "workflow";
 import {
   buildInitialStatus,
   patchRunStatus,
@@ -14,30 +15,44 @@ export interface PublishWorkflowInput extends PublishInput {
   audit?: AuditReport;
 }
 
+interface PublishEvent {
+  state: "running" | "completed" | "failed";
+  message: string;
+  progress?: number;
+  result?: PublishedSite;
+  plannedUrl?: string;
+  error?: string;
+  meta?: Record<string, unknown>;
+}
+
 /**
  * Publish workflow: crawl source → scrape into typed site → AI-enrich from
- * audit report → persist to blob. After completion, `<subdomain>.<apex>`
- * serves the templated site, /llms.txt, /llms-full.txt, /sitemap.xml,
- * /robots.txt.
+ * audit report → persist to blob. Streams progress as SSE chunks via
+ * `workflow.getWritable()`. After completion, `<subdomain>.<apex>` serves the
+ * templated site plus /llms.txt, /llms-full.txt, /robots.txt, /sitemap.xml.
  */
 export async function publishSiteWorkflow(
   runId: string,
   input: PublishWorkflowInput,
-): Promise<void> {
+): Promise<PublishedSite> {
   "use workflow";
 
   await initPublishRun(runId, input);
   try {
     const scraped = await scrapeStep(runId, input);
     const enriched = await enrichStep(runId, scraped, input.audit);
-    await persistStep(runId, enriched);
+    return await persistStep(runId, enriched);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await markPublishFailed(runId, message);
+    throw err;
   }
 }
 
-async function initPublishRun(runId: string, input: PublishWorkflowInput): Promise<void> {
+async function initPublishRun(
+  runId: string,
+  input: PublishWorkflowInput,
+): Promise<void> {
   "use step";
   const initial = buildInitialStatus<PublishedSite>(runId, "publish", {
     sourceUrl: input.sourceUrl,
@@ -49,26 +64,52 @@ async function initPublishRun(runId: string, input: PublishWorkflowInput): Promi
   initial.message = `Scraping ${input.sourceUrl}…`;
   initial.progress = 5;
   await writeRunStatus(initial);
+
+  await emit({
+    state: "running",
+    message: initial.message,
+    progress: initial.progress,
+    meta: initial.meta,
+  });
 }
 
-async function scrapeStep(runId: string, input: PublishWorkflowInput): Promise<PublishedSite> {
+async function scrapeStep(
+  runId: string,
+  input: PublishWorkflowInput,
+): Promise<PublishedSite> {
   "use step";
   await patchRunStatus<PublishedSite>("publish", runId, {
     state: "running",
     message: `Crawling ${input.sourceUrl}…`,
     progress: 25,
   });
+  await emit({
+    state: "running",
+    message: `Crawling ${input.sourceUrl}…`,
+    progress: 25,
+  });
+
   const site = await buildPublishedSite(input);
+
+  const meta = {
+    industry: site.industry,
+    gallery: site.data.gallery.length,
+    menuSections:
+      site.data.industry === "restaurant"
+        ? (site.data.menu?.sections.length ?? 0)
+        : 0,
+  };
   await patchRunStatus<PublishedSite>("publish", runId, {
     state: "running",
     message: `Extracted ${site.data.industry} data for ${site.data.name}.`,
     progress: 55,
-    meta: {
-      industry: site.industry,
-      gallery: site.data.gallery.length,
-      menuSections:
-        site.data.industry === "restaurant" ? (site.data.menu?.sections.length ?? 0) : 0,
-    },
+    meta,
+  });
+  await emit({
+    state: "running",
+    message: `Extracted ${site.data.industry} data for ${site.data.name}.`,
+    progress: 55,
+    meta,
   });
   return site;
 }
@@ -79,34 +120,91 @@ async function enrichStep(
   audit?: AuditReport,
 ): Promise<PublishedSite> {
   "use step";
+  const msg = audit
+    ? "Enriching with audit findings (Claude)…"
+    : "Generating GEO content (Claude)…";
   await patchRunStatus<PublishedSite>("publish", runId, {
     state: "running",
-    message: audit
-      ? "Enriching with audit findings (Claude)…"
-      : "Generating GEO content (Claude)…",
+    message: msg,
     progress: 75,
   });
+  await emit({ state: "running", message: msg, progress: 75 });
+
   const enrichment = await enrichWithAudit(site, audit);
   const merged = applyEnrichment(site, enrichment);
+
+  const enrichMeta = {
+    summaryChars: enrichment.summary?.length ?? 0,
+    aboutChars: enrichment.about?.length ?? 0,
+    faqCount: enrichment.faqs?.length ?? 0,
+    notes: enrichment.notes,
+  };
+  const doneMsg = enrichment.faqs?.length
+    ? `Generated ${enrichment.faqs.length} FAQs + GEO copy.`
+    : "GEO enrichment finished.";
+  await patchRunStatus<PublishedSite>("publish", runId, {
+    state: "running",
+    message: doneMsg,
+    progress: 85,
+    meta: enrichMeta,
+  });
+  await emit({
+    state: "running",
+    message: doneMsg,
+    progress: 85,
+    meta: enrichMeta,
+  });
   return merged;
 }
 
-async function persistStep(runId: string, site: PublishedSite): Promise<void> {
+async function persistStep(
+  runId: string,
+  site: PublishedSite,
+): Promise<PublishedSite> {
   "use step";
   await patchRunStatus<PublishedSite>("publish", runId, {
     state: "running",
     message: "Publishing to subdomain…",
     progress: 92,
   });
+  await emit({
+    state: "running",
+    message: "Publishing to subdomain…",
+    progress: 92,
+  });
+
   const url = await writePublishedSite(site);
   const apex = process.env.SITE_PUBLIC_APEX ?? "aivible.tokyo";
+  const plannedUrl = `https://${site.subdomain}.${apex}`;
+
   await patchRunStatus<PublishedSite>("publish", runId, {
     state: "completed",
     progress: 100,
-    message: `Published at https://${site.subdomain}.${apex}`,
+    message: `Published at ${plannedUrl}`,
     result: site,
     meta: { blobUrl: url ?? "" },
   });
+
+  const writable = getWritable<string>();
+  const writer = writable.getWriter();
+  try {
+    await writeStreamChunk(writer, {
+      state: "completed",
+      message: `Published at ${plannedUrl}`,
+      progress: 100,
+      result: site,
+      plannedUrl,
+    } satisfies PublishEvent);
+    await writer.write("data: [DONE]\n\n");
+    await writer.close();
+  } finally {
+    try {
+      writer.releaseLock();
+    } catch {
+      /* writer already closed */
+    }
+  }
+  return site;
 }
 
 async function markPublishFailed(runId: string, message: string): Promise<void> {
@@ -116,4 +214,38 @@ async function markPublishFailed(runId: string, message: string): Promise<void> 
     error: message,
     message: `Publish failed: ${message}`,
   });
+  const writable = getWritable<string>();
+  const writer = writable.getWriter();
+  try {
+    await writeStreamChunk(writer, {
+      state: "failed",
+      message: `Publish failed: ${message}`,
+      error: message,
+    } satisfies PublishEvent);
+    await writer.write("data: [DONE]\n\n");
+    await writer.close();
+  } finally {
+    try {
+      writer.releaseLock();
+    } catch {
+      /* writer already closed */
+    }
+  }
+}
+
+async function emit(payload: PublishEvent): Promise<void> {
+  const writable = getWritable<string>();
+  const writer = writable.getWriter();
+  try {
+    await writeStreamChunk(writer, payload);
+  } finally {
+    writer.releaseLock();
+  }
+}
+
+async function writeStreamChunk<T>(
+  writer: WritableStreamDefaultWriter<string>,
+  payload: T,
+): Promise<void> {
+  await writer.write(`data: ${JSON.stringify(payload)}\n\n`);
 }

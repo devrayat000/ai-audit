@@ -13,7 +13,7 @@ export interface CrawlOptions {
   /** max number of pages to fetch/render concurrently */
   maxConcurrency?: number;
   industry?: Industry;
-  /** capture a viewport screenshot for the homepage (used by the regenerator preview) */
+  /** capture a viewport screenshot for the homepage (used by the publish preview/OG fallback) */
   screenshotHomepage?: boolean;
   onProgress?: (event: CrawlEvent) => void;
 }

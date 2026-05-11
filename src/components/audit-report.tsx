@@ -9,8 +9,6 @@ import { CategoryBars } from "./category-bars";
 import { CheckResultRow } from "./check-result-row";
 import { PageList } from "./page-list";
 import { ExternalLink, Globe2 } from "lucide-react";
-import { RegenerateCta } from "./regenerate-cta";
-import { RegenerateWizard } from "./regenerate-wizard";
 import { PublishCta } from "./publish-cta";
 import { PublishWizard } from "./publish-wizard";
 
@@ -24,7 +22,6 @@ const INDUSTRY_LABEL: Record<string, string> = {
 };
 
 export function AuditReportView({ report }: { report: AuditReport }) {
-  const [regenOpen, setRegenOpen] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
   return (
     <div className="flex flex-col gap-6">
@@ -84,7 +81,7 @@ export function AuditReportView({ report }: { report: AuditReport }) {
               </div>
             ) : (
               report.siteChecks.map((c) => (
-                <CheckResultRow key={c.rule} check={c} report={report} />
+                <CheckResultRow key={c.analyzerKey} check={c} report={report} />
               ))
             )}
           </CardContent>
@@ -100,10 +97,7 @@ export function AuditReportView({ report }: { report: AuditReport }) {
         </Card>
       </div>
 
-      <div className="grid md:grid-cols-2 gap-4">
-        <PublishCta onClick={() => setPublishOpen(true)} />
-        <RegenerateCta onClick={() => setRegenOpen(true)} />
-      </div>
+      <PublishCta onClick={() => setPublishOpen(true)} />
 
       <Card>
         <CardHeader>
@@ -116,7 +110,7 @@ export function AuditReportView({ report }: { report: AuditReport }) {
             </div>
           ) : (
             report.topRecommendations.map((c) => (
-              <CheckResultRow key={c.rule} check={c} report={report} />
+              <CheckResultRow key={c.analyzerKey} check={c} report={report} />
             ))
           )}
         </CardContent>
@@ -139,11 +133,6 @@ export function AuditReportView({ report }: { report: AuditReport }) {
         </Card>
       )}
 
-      <RegenerateWizard
-        report={report}
-        open={regenOpen}
-        onClose={() => setRegenOpen(false)}
-      />
       <PublishWizard
         report={report}
         open={publishOpen}

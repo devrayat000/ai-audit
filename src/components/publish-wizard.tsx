@@ -83,8 +83,6 @@ export function PublishWizard({ report, open, onClose }: Props) {
 
   if (!open) return null;
 
-  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
   const startPublish = async () => {
     setRunning(true);
     setError(null);
@@ -103,53 +101,66 @@ export function PublishWizard({ report, open, onClose }: Props) {
           audit: report,
         }),
       });
-      const j = await r.json();
       if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
         setError(j.error ?? `Publish failed (${r.status})`);
         setRunning(false);
         return;
       }
-      const runId = j.runId as string;
-      const planned = j.plannedUrl as string;
-      pollUntilDone(runId, planned);
+      if (!r.body) {
+        setError("Server returned no stream.");
+        setRunning(false);
+        return;
+      }
+      await consumePublishStream(r.body);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Network error");
       setRunning(false);
     }
   };
 
-  const pollUntilDone = async (runId: string, plannedUrl: string) => {
-    const startedAt = Date.now();
-    const timeoutMs = 5 * 60 * 1000;
-    while (Date.now() - startedAt < timeoutMs) {
-      try {
-        const r = await fetch(`/api/regenerate/status?runId=${runId}&kind=publish`, {
-          cache: "no-store",
-        });
-        if (r.status !== 404) {
-          const s = await r.json();
-          setProgress({
-            message: typeof s.message === "string" ? s.message : s.state ?? "running",
-            pct: typeof s.progress === "number" ? s.progress : undefined,
-          });
-          if (s.state === "completed") {
-            setPublishedUrl(plannedUrl);
-            setDone(true);
-            setRunning(false);
-            return;
-          }
-          if (s.state === "failed") {
-            setError(s.error ?? "Publish failed.");
-            setRunning(false);
-            return;
-          }
+  const consumePublishStream = async (body: ReadableStream<Uint8Array>) => {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done: streamDone, value } = await reader.read();
+      if (streamDone) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split("\n\n");
+      buf = parts.pop() ?? "";
+      for (const part of parts) {
+        const line = part.split("\n").find((l) => l.startsWith("data: "));
+        if (!line) continue;
+        const payload = line.slice(6).trim();
+        if (payload === "[DONE]") continue;
+        let ev: {
+          state?: string;
+          message?: string;
+          progress?: number;
+          plannedUrl?: string;
+          error?: string;
+        };
+        try {
+          ev = JSON.parse(payload);
+        } catch {
+          continue;
         }
-      } catch {
-        // ignore blip
+        if (typeof ev.message === "string" || typeof ev.progress === "number") {
+          setProgress({
+            message: ev.message ?? (ev.state ?? "running"),
+            pct: typeof ev.progress === "number" ? ev.progress : undefined,
+          });
+        }
+        if (ev.state === "completed") {
+          if (ev.plannedUrl) setPublishedUrl(ev.plannedUrl);
+          setDone(true);
+        }
+        if (ev.state === "failed") {
+          setError(ev.error ?? ev.message ?? "Publish failed.");
+        }
       }
-      await sleep(2000);
     }
-    setError("Timed out waiting for publish.");
     setRunning(false);
   };
 
