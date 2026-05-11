@@ -11,6 +11,8 @@ import { PageList } from "./page-list";
 import { ExternalLink, Globe2 } from "lucide-react";
 import { RegenerateCta } from "./regenerate-cta";
 import { RegenerateWizard } from "./regenerate-wizard";
+import { PublishCta } from "./publish-cta";
+import { PublishWizard } from "./publish-wizard";
 
 const INDUSTRY_LABEL: Record<string, string> = {
   restaurant: "Restaurant",
@@ -23,6 +25,7 @@ const INDUSTRY_LABEL: Record<string, string> = {
 
 export function AuditReportView({ report }: { report: AuditReport }) {
   const [regenOpen, setRegenOpen] = useState(false);
+  const [publishOpen, setPublishOpen] = useState(false);
   return (
     <div className="flex flex-col gap-6">
       <Card>
@@ -97,7 +100,10 @@ export function AuditReportView({ report }: { report: AuditReport }) {
         </Card>
       </div>
 
-      <RegenerateCta onClick={() => setRegenOpen(true)} />
+      <div className="grid md:grid-cols-2 gap-4">
+        <PublishCta onClick={() => setPublishOpen(true)} />
+        <RegenerateCta onClick={() => setRegenOpen(true)} />
+      </div>
 
       <Card>
         <CardHeader>
@@ -137,6 +143,11 @@ export function AuditReportView({ report }: { report: AuditReport }) {
         report={report}
         open={regenOpen}
         onClose={() => setRegenOpen(false)}
+      />
+      <PublishWizard
+        report={report}
+        open={publishOpen}
+        onClose={() => setPublishOpen(false)}
       />
     </div>
   );

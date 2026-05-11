@@ -34,7 +34,7 @@ async function loadBlob(): Promise<BlobModule | null> {
   }
 }
 
-export type RunKind = "regen" | "deploy";
+export type RunKind = "regen" | "deploy" | "publish";
 export type RunState = "queued" | "running" | "completed" | "failed";
 
 export interface RunStatus<T = unknown> {

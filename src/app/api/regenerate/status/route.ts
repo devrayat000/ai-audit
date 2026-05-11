@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 const querySchema = z.object({
   runId: z.string().min(8),
-  kind: z.enum(["regen", "deploy"]).default("regen"),
+  kind: z.enum(["regen", "deploy", "publish"]).default("regen"),
 });
 
 export async function GET(req: NextRequest) {
