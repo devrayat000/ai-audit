@@ -3,6 +3,7 @@ import { withWorkflow } from "workflow/next";
 
 const nextConfig: NextConfig = {
   reactCompiler: true,
+  reactStrictMode: false,
   serverExternalPackages: [
     "playwright",
     "playwright-core",

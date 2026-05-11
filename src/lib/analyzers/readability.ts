@@ -1,14 +1,6 @@
 import { makeCheck } from "./base";
 import type { PageAnalyzer } from "./base";
-
-let textReadability: { fleschReadingEase: (s: string) => number } | null = null;
-async function getReadability() {
-  if (!textReadability) {
-    const mod = await import("text-readability");
-    textReadability = mod.default ?? mod;
-  }
-  return textReadability!;
-}
+import tr from "text-readability";
 
 export const readabilityAnalyzer: PageAnalyzer = {
   key: "readability",
@@ -28,13 +20,13 @@ export const readabilityAnalyzer: PageAnalyzer = {
           maxScore: 5,
           message: "Not enough text to score readability.",
           evidence: { textLength: text.length },
-          fixSuggestion: "Add more text content (~300 words minimum) so AI engines can extract meaningful answers.",
+          fixSuggestion:
+            "Add more text content (~300 words minimum) so AI engines can extract meaningful answers.",
           llmFixAvailable: false,
           pageUrl: page.url,
         },
       ];
     }
-    const tr = await getReadability();
     let flesch = 0;
     try {
       flesch = tr.fleschReadingEase(text);
@@ -42,7 +34,11 @@ export const readabilityAnalyzer: PageAnalyzer = {
       flesch = 0;
     }
     const sentences = text.split(/[.!?]+\s/).filter((s) => s.trim().length > 0);
-    const avgWords = sentences.length > 0 ? sentences.reduce((a, s) => a + s.split(/\s+/).length, 0) / sentences.length : 0;
+    const avgWords =
+      sentences.length > 0
+        ? sentences.reduce((a, s) => a + s.split(/\s+/).length, 0) /
+          sentences.length
+        : 0;
 
     let score = 0;
     let status: "pass" | "warn" | "fail" = "fail";

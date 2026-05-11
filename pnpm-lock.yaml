@@ -69,8 +69,8 @@ importers:
         specifier: ^3.5.0
         version: 3.5.0
       text-readability:
-        specifier: ^1.1.1
-        version: 1.1.1
+        specifier: npm:text-readability-ts@^1.0.11
+        version: text-readability-ts@1.0.11
       tw-animate-css:
         specifier: ^1.4.0
         version: 1.4.0
@@ -1577,8 +1577,8 @@ packages:
   '@types/node@20.19.39':
     resolution: {integrity: sha512-orrrD74MBUyK8jOAD/r0+lfa1I2MO6I+vAkmAWzMYbCcgrN4lCrmK52gRFQq/JRxfYPfonkr4b0jcY7Olqdqbw==}
 
-  '@types/pluralize@0.0.29':
-    resolution: {integrity: sha512-BYOID+l2Aco2nBik+iYS4SZX0Lf20KPILP5RGmM1IgzdwNdTs0eebiFriOPcej1sX9mLnSoiNte5zcFxssgpGA==}
+  '@types/pluralize@0.0.33':
+    resolution: {integrity: sha512-JOqsl+ZoCpP4e8TDke9W79FDcSgPAR0l6pixx2JHkhnRjvShyYiAYw2LVsnA7K08Y6DeOnaU6ujmENO4os/cYg==}
 
   '@types/react-dom@19.2.3':
     resolution: {integrity: sha512-jp2L/eY6fn+KgVVQAOqYItbF0VY/YApe5Mz2F0aykSO8gx31bYCZyvSeYxCHKvzHG5eZjc+zyaS5BrBWya2+kQ==}
@@ -4015,9 +4015,6 @@ packages:
   node-releases@2.0.38:
     resolution: {integrity: sha512-3qT/88Y3FbH/Kx4szpQQ4HzUbVrHPKTLVpVocKiLfoYvw9XSGOX2FmD2d6DrXbVYyAQTF2HeF6My8jmzx7/CRw==}
 
-  normalize-strings@1.1.1:
-    resolution: {integrity: sha512-fARPRdTwmrQDLYhmeh7j/eZwrCP6WzxD6uKOdK/hT/uKACAE9AG2Bc2dgqOZLkfmmctHpfcJ9w3AQnfLgg3GYg==}
-
   normalize-url@8.1.1:
     resolution: {integrity: sha512-JYc0DPlpGWB40kH5g07gGTrYuMqV653k3uBKY6uITPWds3M0ov3GaWGp9lbE3Bzngx8+XkfzgvASb9vk9JDFXQ==}
     engines: {node: '>=14.16'}
@@ -4786,10 +4783,6 @@ packages:
     resolution: {integrity: sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w==}
     engines: {node: '>= 0.4'}
 
-  syllable@5.0.1:
-    resolution: {integrity: sha512-HWtNCp6v7J8H0lrT8j1HHjfOLltRoDcC7QRFVu25p4BE52JqetXG65nqC7CsatT8WQRfY4Qvh93BWJIUxbmXFg==}
-    hasBin: true
-
   tagged-tag@1.0.0:
     resolution: {integrity: sha512-yEFYrVhod+hdNyx7g5Bnkkb0G6si8HJurOoOEgC8B/O0uXLHlaey/65KRv6cuWBNhBgHKAROVpc7QyYqE5gFng==}
     engines: {node: '>=20'}
@@ -4821,8 +4814,8 @@ packages:
   text-decoder@1.2.7:
     resolution: {integrity: sha512-vlLytXkeP4xvEq2otHeJfSQIRyWxo/oZGEbXrtEEF9Hnmrdly59sUbzZ/QgyWuLYHctCHxFF4tRQZNQ9k60ExQ==}
 
-  text-readability@1.1.1:
-    resolution: {integrity: sha512-lo0KlcNRhlBAxTCEPXMFricim2vJVm0xAVdy40N6WQDn+MeKDBFxl0bMdP2YIMm9ph34CPvxYO/Lxb1QIi67ig==}
+  text-readability-ts@1.0.11:
+    resolution: {integrity: sha512-Th1E5S5gu7K0Sg4XQiE1sr6oXOBmAvrWTl1wVxEttS4BycV2ArGf8I1M6RxkA5cQtTkn7xa1afUYzvOym3ynBg==}
 
   throttleit@2.1.0:
     resolution: {integrity: sha512-nt6AMGKW1p/70DF/hGBdJB57B8Tspmbp5gfJ8ilhLnt7kkr2ye7hzD6NVG8GGErk2HWF34igrL2CXmNIkzKqKw==}
@@ -6752,7 +6745,7 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
-  '@types/pluralize@0.0.29': {}
+  '@types/pluralize@0.0.33': {}
 
   '@types/react-dom@19.2.3(@types/react@19.2.14)':
     dependencies:
@@ -9572,8 +9565,6 @@ snapshots:
 
   node-releases@2.0.38: {}
 
-  normalize-strings@1.1.1: {}
-
   normalize-url@8.1.1: {}
 
   npm-run-path@4.0.1:
@@ -10473,12 +10464,6 @@ snapshots:
 
   supports-preserve-symlinks-flag@1.0.0: {}
 
-  syllable@5.0.1:
-    dependencies:
-      '@types/pluralize': 0.0.29
-      normalize-strings: 1.1.1
-      pluralize: 8.0.0
-
   tagged-tag@1.0.0: {}
 
   tailwind-merge@3.5.0: {}
@@ -10524,10 +10509,10 @@ snapshots:
     transitivePeerDependencies:
       - react-native-b4a
 
-  text-readability@1.1.1:
+  text-readability-ts@1.0.11:
     dependencies:
+      '@types/pluralize': 0.0.33
       pluralize: 8.0.0
-      syllable: 5.0.1
 
   throttleit@2.1.0: {}
 

@@ -1,4 +1,4 @@
-import type { Browser } from "playwright";
+import { type Browser, chromium } from "playwright";
 import { DEFAULT_HUMAN_UA } from "../utils/ai-bots";
 
 export interface RenderResult {
@@ -26,17 +26,11 @@ let browserPromise: Promise<Browser> | null = null;
 async function getBrowser(): Promise<Browser> {
   if (!browserPromise) {
     if (process.env.VERCEL) {
-      browserPromise = (async () => {
-        const { chromium } = await import("playwright");
-        return chromium.connectOverCDP(
-          `wss://production-sfo.browserless.io?token=${process.env.BROWSERLESS_API_KEY}`,
-        );
-      })();
+      browserPromise = chromium.connectOverCDP(
+        `wss://production-sfo.browserless.io?token=${process.env.BROWSERLESS_API_KEY}`,
+      );
     } else {
-      browserPromise = (async () => {
-        const { chromium } = await import("playwright");
-        return chromium.launch({ headless: true });
-      })();
+      browserPromise = chromium.launch({ headless: true });
     }
   }
   return browserPromise;
