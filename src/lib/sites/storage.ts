@@ -126,6 +126,55 @@ export async function listPublishedSites(): Promise<
     }));
 }
 
+const RESERVED_SUBDOMAINS = new Set([
+  "www", "api", "app", "admin", "mail", "blog", "ftp",
+  "ns1", "ns2", "ns3", "ns4", "smtp", "pop", "imap",
+  "test", "dev", "staging", "preview", "sites",
+]);
+
+export function isReservedSubdomain(sub: string): boolean {
+  return RESERVED_SUBDOMAINS.has(sub);
+}
+
+function randomSuffix(len = 4): string {
+  const alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
+  let out = "";
+  for (let i = 0; i < len; i++) {
+    out += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return out;
+}
+
+/**
+ * Find an available subdomain starting from `seed`. Tries the seed first,
+ * then `seed-<rand>` variants until one is free or we hit `maxAttempts`.
+ * Returns `null` if no slot can be found (extremely unlikely).
+ */
+export async function findAvailableSubdomain(
+  seed: string,
+  maxAttempts = 8,
+): Promise<string | null> {
+  let base = normalizeSubdomain(seed);
+  if (!base || !isValidSubdomain(base) || isReservedSubdomain(base)) {
+    base = `site-${randomSuffix(4)}`;
+  }
+  // Reserve room for "-xxxx" suffix on the base.
+  if (base.length > 50) base = base.slice(0, 50);
+
+  // Try the bare seed first.
+  const existing = await readPublishedSite(base);
+  if (!existing) return base;
+
+  // Then try seeded variants.
+  for (let i = 0; i < maxAttempts; i++) {
+    const candidate = `${base}-${randomSuffix(3 + Math.floor(i / 3))}`;
+    if (!isValidSubdomain(candidate) || isReservedSubdomain(candidate)) continue;
+    const taken = await readPublishedSite(candidate);
+    if (!taken) return candidate;
+  }
+  return null;
+}
+
 export async function deletePublishedSite(subdomain: string): Promise<void> {
   if (!isBlobConfigured()) return;
   const blob = await loadBlob();

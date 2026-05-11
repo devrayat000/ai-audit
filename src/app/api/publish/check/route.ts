@@ -1,23 +1,22 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import {
+  findAvailableSubdomain,
+  isReservedSubdomain,
   isValidSubdomain,
   normalizeSubdomain,
   readPublishedSite,
 } from "@/lib/sites/storage";
+import { normalizeUrl } from "@/lib/utils/url";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const schema = z.object({
   subdomain: z.string().min(2).max(63),
+  /** When provided, lets us tell the user that the slot is "yours" (same source URL). */
+  sourceUrl: z.string().optional(),
 });
-
-const RESERVED = new Set([
-  "www", "api", "app", "admin", "mail", "blog", "ftp",
-  "ns1", "ns2", "ns3", "ns4", "smtp", "pop", "imap",
-  "test", "dev", "staging", "preview", "sites",
-]);
 
 export async function POST(req: NextRequest) {
   let body: unknown;
@@ -28,7 +27,10 @@ export async function POST(req: NextRequest) {
   }
   const parsed = schema.safeParse(body);
   if (!parsed.success) {
-    return Response.json({ error: parsed.error.message, code: "VALIDATION" }, { status: 400 });
+    return Response.json(
+      { error: parsed.error.message, code: "VALIDATION" },
+      { status: 400 },
+    );
   }
   const subdomain = normalizeSubdomain(parsed.data.subdomain);
   if (!isValidSubdomain(subdomain)) {
@@ -38,16 +40,29 @@ export async function POST(req: NextRequest) {
       reason: "Subdomain must be alphanumeric, may include dashes, 2–63 chars.",
     });
   }
-  if (RESERVED.has(subdomain)) {
+  if (isReservedSubdomain(subdomain)) {
     return Response.json({ ok: false, subdomain, reason: "Reserved." });
   }
   const existing = await readPublishedSite(subdomain);
   if (existing) {
+    const sourceUrl = parsed.data.sourceUrl
+      ? normalizeUrl(parsed.data.sourceUrl)
+      : null;
+    const sameSource =
+      !!sourceUrl &&
+      existing.sourceUrl.replace(/\/$/, "") === sourceUrl.replace(/\/$/, "");
+    const suggestion = sameSource
+      ? null
+      : await findAvailableSubdomain(subdomain);
     return Response.json({
       ok: false,
       subdomain,
-      reason: `Already published from ${existing.sourceUrl}.`,
+      reason: sameSource
+        ? "Already published from this site. Updating will overwrite."
+        : `Already published from ${existing.sourceUrl}.`,
       takenBy: existing.sourceUrl,
+      sameSource,
+      suggestion,
     });
   }
   return Response.json({ ok: true, subdomain });

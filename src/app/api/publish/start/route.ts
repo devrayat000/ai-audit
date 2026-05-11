@@ -8,6 +8,8 @@ import {
   writeRunStatus,
 } from "@/lib/workflow/status-store";
 import {
+  findAvailableSubdomain,
+  isReservedSubdomain,
   isValidSubdomain,
   normalizeSubdomain,
   readPublishedSite,
@@ -22,16 +24,16 @@ const schema = z.object({
   sourceUrl: z.string().min(4),
   subdomain: z.string().min(2).max(63),
   industry: z.enum(["restaurant", "travel", "service", "general"]),
+  /** "overwrite" — replace existing publish at this subdomain (same source only). */
   overwrite: z.boolean().optional(),
+  /**
+   * "autoUnique" — when subdomain is taken by a different source, append a
+   * short random suffix automatically instead of failing.
+   */
+  autoUnique: z.boolean().optional(),
   /** Full audit report. Forwarded to the publish workflow's enrichment step. */
   audit: z.unknown().optional(),
 });
-
-const RESERVED = new Set([
-  "www", "api", "app", "admin", "mail", "blog", "ftp",
-  "ns1", "ns2", "ns3", "ns4", "smtp", "pop", "imap",
-  "test", "dev", "staging", "preview", "sites",
-]);
 
 export async function POST(req: NextRequest) {
   let body: unknown;
@@ -52,7 +54,7 @@ export async function POST(req: NextRequest) {
   }
 
   const sourceUrl = normalizeUrl(parsed.data.sourceUrl);
-  const subdomain = normalizeSubdomain(parsed.data.subdomain);
+  let subdomain = normalizeSubdomain(parsed.data.subdomain);
 
   if (!isValidSubdomain(subdomain)) {
     return Response.json(
@@ -63,23 +65,56 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     );
   }
-  if (RESERVED.has(subdomain)) {
+  if (isReservedSubdomain(subdomain)) {
     return Response.json(
       { error: `Subdomain "${subdomain}" is reserved.`, code: "RESERVED" },
       { status: 400 },
     );
   }
 
-  if (!parsed.data.overwrite) {
-    const existing = await readPublishedSite(subdomain);
-    if (existing) {
-      return Response.json(
-        {
-          error: `Subdomain "${subdomain}" is already published from ${existing.sourceUrl}. Pass overwrite=true to replace.`,
-          code: "TAKEN",
-        },
-        { status: 409 },
-      );
+  const existing = await readPublishedSite(subdomain);
+  if (existing) {
+    const sameSource =
+      existing.sourceUrl.replace(/\/$/, "") === sourceUrl.replace(/\/$/, "");
+    if (sameSource) {
+      // Same site re-publishing: require explicit overwrite acknowledgement.
+      if (!parsed.data.overwrite) {
+        return Response.json(
+          {
+            error: `Subdomain "${subdomain}" already serves this source. Pass overwrite=true to refresh.`,
+            code: "TAKEN_BY_SELF",
+            subdomain,
+          },
+          { status: 409 },
+        );
+      }
+      // proceed — same source, allowed overwrite
+    } else {
+      // Different source: never overwrite. Auto-suggest or fail.
+      if (parsed.data.autoUnique) {
+        const unique = await findAvailableSubdomain(subdomain);
+        if (!unique) {
+          return Response.json(
+            {
+              error: "Could not allocate a unique subdomain.",
+              code: "NO_FREE_SUBDOMAIN",
+            },
+            { status: 500 },
+          );
+        }
+        subdomain = unique;
+      } else {
+        const suggestion = await findAvailableSubdomain(subdomain);
+        return Response.json(
+          {
+            error: `Subdomain "${subdomain}" is already published from ${existing.sourceUrl}.`,
+            code: "TAKEN",
+            takenBy: existing.sourceUrl,
+            suggestion,
+          },
+          { status: 409 },
+        );
+      }
     }
   }
 

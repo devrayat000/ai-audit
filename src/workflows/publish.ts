@@ -174,7 +174,7 @@ async function persistStep(
   });
 
   const url = await writePublishedSite(site);
-  const apex = process.env.SITE_PUBLIC_APEX ?? "aivible.tokyo";
+  const apex = process.env.SITE_PUBLIC_APEX ?? "shorobik.com";
   const plannedUrl = `https://${site.subdomain}.${apex}`;
 
   await patchRunStatus<PublishedSite>("publish", runId, {

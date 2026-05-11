@@ -22,7 +22,7 @@ interface Props {
 
 type SiteIndustry = "restaurant" | "travel" | "service" | "general";
 
-const APEX = process.env.NEXT_PUBLIC_SITE_APEX ?? "aivible.tokyo";
+const APEX = process.env.NEXT_PUBLIC_SITE_APEX ?? "shorobik.com";
 
 function defaultSubdomain(rootUrl: string): string {
   try {
@@ -49,7 +49,12 @@ export function PublishWizard({ report, open, onClose }: Props) {
   const initialInd = useMemo(() => defaultIndustry(report), [report]);
   const [subdomain, setSubdomain] = useState(initialSub);
   const [industry, setIndustry] = useState<SiteIndustry>(initialInd);
-  const [check, setCheck] = useState<{ ok: boolean; reason?: string } | null>(null);
+  const [check, setCheck] = useState<{
+    ok: boolean;
+    reason?: string;
+    sameSource?: boolean;
+    suggestion?: string | null;
+  } | null>(null);
   const [checking, setChecking] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,10 +73,15 @@ export function PublishWizard({ report, open, onClose }: Props) {
         const r = await fetch("/api/publish/check", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ subdomain }),
+          body: JSON.stringify({ subdomain, sourceUrl: report.rootUrl }),
         });
         const j = await r.json();
-        setCheck({ ok: !!j.ok, reason: j.reason });
+        setCheck({
+          ok: !!j.ok,
+          reason: j.reason,
+          sameSource: !!j.sameSource,
+          suggestion: j.suggestion ?? null,
+        });
       } catch {
         setCheck(null);
       } finally {
@@ -79,7 +89,7 @@ export function PublishWizard({ report, open, onClose }: Props) {
       }
     }, 400);
     return () => clearTimeout(handle);
-  }, [subdomain]);
+  }, [subdomain, report.rootUrl]);
 
   if (!open) return null;
 
@@ -97,7 +107,8 @@ export function PublishWizard({ report, open, onClose }: Props) {
           sourceUrl: report.rootUrl,
           subdomain,
           industry,
-          overwrite: check?.reason?.startsWith("Already published") ? true : undefined,
+          // Same-source slot → refresh in place. Different source → never overwrite.
+          overwrite: check?.sameSource ? true : undefined,
           audit: report,
         }),
       });
@@ -164,10 +175,11 @@ export function PublishWizard({ report, open, onClose }: Props) {
     setRunning(false);
   };
 
+  // Allow start when the subdomain is fully free, OR when the slot is taken
+  // by THIS same source (refresh in place). For different-source collisions
+  // user must pick the suggested unique subdomain first.
   const canStart =
-    !!subdomain &&
-    !running &&
-    (check?.ok || check?.reason?.startsWith("Already published"));
+    !!subdomain && !running && (check?.ok === true || check?.sameSource === true);
 
   return (
     <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm overflow-y-auto">
@@ -214,7 +226,7 @@ export function PublishWizard({ report, open, onClose }: Props) {
                       .{APEX}
                     </span>
                   </div>
-                  <div className="mt-1 text-xs h-4">
+                  <div className="mt-1 text-xs min-h-4 flex flex-wrap items-center gap-x-2 gap-y-1">
                     {checking && (
                       <span className="text-muted-foreground">Checking availability…</span>
                     )}
@@ -223,10 +235,26 @@ export function PublishWizard({ report, open, onClose }: Props) {
                         <CheckCircle2 className="size-3" /> Available
                       </span>
                     )}
-                    {!checking && check && !check.ok && (
-                      <span className="text-danger inline-flex items-center gap-1">
-                        <XCircle className="size-3" /> {check.reason}
+                    {!checking && check?.sameSource && (
+                      <span className="text-warning inline-flex items-center gap-1">
+                        <CheckCircle2 className="size-3" /> Owned by this site — re-publish will overwrite.
                       </span>
+                    )}
+                    {!checking && check && !check.ok && !check.sameSource && (
+                      <>
+                        <span className="text-danger inline-flex items-center gap-1">
+                          <XCircle className="size-3" /> {check.reason}
+                        </span>
+                        {check.suggestion && (
+                          <button
+                            type="button"
+                            onClick={() => setSubdomain(check.suggestion ?? subdomain)}
+                            className="font-mono underline underline-offset-2 hover:no-underline"
+                          >
+                            Try {check.suggestion}
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>

@@ -2,11 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 
 // Hosts we treat as "app" (not subdomain content):
 //   - localhost / 127.0.0.1
-//   - root apex (e.g. aivible.tokyo)
+//   - root apex (e.g. shorobik.com)
 //   - www.<apex>
 // Anything else with a single subdomain label gets rewritten to /sites/<label>.
 
-const APEX_HOSTS = (process.env.SITE_APEX_HOSTS ?? "aivible.tokyo,localhost:3000,localhost")
+const APEX_HOSTS = (process.env.SITE_APEX_HOSTS ?? "shorobik.com,localhost:3000,localhost")
   .split(",")
   .map((h) => h.trim().toLowerCase())
   .filter(Boolean);

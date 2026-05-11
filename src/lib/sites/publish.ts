@@ -10,7 +10,7 @@ export interface PublishInput {
 }
 
 function buildCanonical(subdomain: string): string {
-  const apex = process.env.SITE_PUBLIC_APEX ?? "aivible.tokyo";
+  const apex = process.env.SITE_PUBLIC_APEX ?? "shorobik.com";
   return `https://${subdomain}.${apex}`;
 }
 

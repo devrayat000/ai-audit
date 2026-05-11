@@ -7,6 +7,8 @@ interface Props {
   onClick: () => void;
 }
 
+const APEX = process.env.NEXT_PUBLIC_SITE_APEX ?? "shorobik.com";
+
 export function PublishCta({ onClick }: Props) {
   return (
     <div className="rounded-xl bg-card p-5 md:p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4 ring-1 ring-foreground/10">
@@ -18,7 +20,7 @@ export function PublishCta({ onClick }: Props) {
           <div className="font-heading text-xl md:text-2xl">Publish as an AI-discoverable site</div>
           <p className="text-sm text-muted-foreground">
             We&rsquo;ll scrape the menu, hours, photos and contact info, drop them into a clean
-            template, and host it at <span className="font-mono">&lt;name&gt;.aivible.tokyo</span> for AI engines to read.
+            template, and host it at <span className="font-mono">&lt;name&gt;.{APEX}</span> for AI engines to read.
           </p>
         </div>
       </div>
