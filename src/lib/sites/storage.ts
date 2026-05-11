@@ -1,42 +1,13 @@
-import { isBlobConfigured } from "../storage/blob";
+import {
+  assertBlobConfigured,
+  blob,
+  blobToken,
+  isBlobConfigured,
+} from "../storage/blob";
 import type { PublishedSite } from "./types";
 
-interface BlobModule {
-  put: (
-    path: string,
-    body: string | Uint8Array,
-    opts: {
-      access: "public";
-      contentType?: string;
-      addRandomSuffix?: boolean;
-      allowOverwrite?: boolean;
-      cacheControlMaxAge?: number;
-      token?: string;
-    },
-  ) => Promise<{ url: string; pathname: string }>;
-  head: (
-    pathnameOrUrl: string,
-    opts?: { token?: string },
-  ) => Promise<{ url: string; pathname: string; size: number; uploadedAt: Date }>;
-  list: (opts?: { prefix?: string; limit?: number; token?: string }) => Promise<{
-    blobs: Array<{ url: string; pathname: string; size: number; uploadedAt: Date }>;
-  }>;
-  del: (urlOrPath: string | string[], opts?: { token?: string }) => Promise<void>;
-}
-
-async function loadBlob(): Promise<BlobModule | null> {
-  try {
-    const moduleName = "@vercel/blob";
-    const mod = (await import(/* webpackIgnore: true */ moduleName)) as BlobModule;
-    if (typeof mod.put === "function") return mod;
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 export function isValidSubdomain(sub: string): boolean {
-  return /^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/.test(sub) && sub.length <= 63;
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(sub) && sub.length <= 63;
 }
 
 export function normalizeSubdomain(input: string): string {
@@ -53,10 +24,8 @@ function siteKey(subdomain: string): string {
   return `sites/${subdomain}.json`;
 }
 
-export async function writePublishedSite(site: PublishedSite): Promise<string | null> {
-  if (!isBlobConfigured()) return null;
-  const blob = await loadBlob();
-  if (!blob) return null;
+export async function writePublishedSite(site: PublishedSite): Promise<string> {
+  assertBlobConfigured();
   const body = JSON.stringify(site);
   const r = await blob.put(siteKey(site.subdomain), body, {
     access: "public",
@@ -64,41 +33,31 @@ export async function writePublishedSite(site: PublishedSite): Promise<string | 
     addRandomSuffix: false,
     allowOverwrite: true,
     cacheControlMaxAge: 60,
-    token: process.env.BLOB_READ_WRITE_TOKEN,
+    token: blobToken(),
   });
   return r.url;
 }
 
 async function discoverSiteBlobUrl(subdomain: string): Promise<string | null> {
   if (!isBlobConfigured()) return null;
-  const blob = await loadBlob();
-  if (!blob) return null;
   const pathname = siteKey(subdomain);
   try {
-    if (typeof blob.head === "function") {
-      const meta = await blob.head(pathname, { token: process.env.BLOB_READ_WRITE_TOKEN });
-      return meta.url;
-    }
+    const meta = await blob.head(pathname, { token: blobToken() });
+    return meta.url;
   } catch {
-    // fall through
+    // head() throws for not-found; fall back to list() for older API quirks.
   }
   try {
-    if (typeof blob.list === "function") {
-      const r = await blob.list({
-        prefix: pathname,
-        limit: 1,
-        token: process.env.BLOB_READ_WRITE_TOKEN,
-      });
-      const found = r.blobs.find((b) => b.pathname === pathname) ?? r.blobs[0];
-      return found?.url ?? null;
-    }
+    const r = await blob.list({ prefix: pathname, limit: 1, token: blobToken() });
+    const found = r.blobs.find((b) => b.pathname === pathname) ?? r.blobs[0];
+    return found?.url ?? null;
   } catch {
-    // ignore
+    return null;
   }
-  return null;
 }
 
 export async function readPublishedSite(subdomain: string): Promise<PublishedSite | null> {
+  if (!isValidSubdomain(subdomain)) return null;
   const url = await discoverSiteBlobUrl(subdomain);
   if (!url) return null;
   try {
@@ -114,9 +73,7 @@ export async function listPublishedSites(): Promise<
   Array<{ subdomain: string; url: string; uploadedAt: string }>
 > {
   if (!isBlobConfigured()) return [];
-  const blob = await loadBlob();
-  if (!blob || typeof blob.list !== "function") return [];
-  const r = await blob.list({ prefix: "sites/", token: process.env.BLOB_READ_WRITE_TOKEN });
+  const r = await blob.list({ prefix: "sites/", token: blobToken() });
   return r.blobs
     .filter((b) => b.pathname.endsWith(".json"))
     .map((b) => ({
@@ -148,7 +105,6 @@ function randomSuffix(len = 4): string {
 /**
  * Find an available subdomain starting from `seed`. Tries the seed first,
  * then `seed-<rand>` variants until one is free or we hit `maxAttempts`.
- * Returns `null` if no slot can be found (extremely unlikely).
  */
 export async function findAvailableSubdomain(
   seed: string,
@@ -158,14 +114,11 @@ export async function findAvailableSubdomain(
   if (!base || !isValidSubdomain(base) || isReservedSubdomain(base)) {
     base = `site-${randomSuffix(4)}`;
   }
-  // Reserve room for "-xxxx" suffix on the base.
   if (base.length > 50) base = base.slice(0, 50);
 
-  // Try the bare seed first.
   const existing = await readPublishedSite(base);
   if (!existing) return base;
 
-  // Then try seeded variants.
   for (let i = 0; i < maxAttempts; i++) {
     const candidate = `${base}-${randomSuffix(3 + Math.floor(i / 3))}`;
     if (!isValidSubdomain(candidate) || isReservedSubdomain(candidate)) continue;
@@ -177,7 +130,9 @@ export async function findAvailableSubdomain(
 
 export async function deletePublishedSite(subdomain: string): Promise<void> {
   if (!isBlobConfigured()) return;
-  const blob = await loadBlob();
-  if (!blob || typeof blob.del !== "function") return;
-  await blob.del(siteKey(subdomain), { token: process.env.BLOB_READ_WRITE_TOKEN });
+  try {
+    await blob.del(siteKey(subdomain), { token: blobToken() });
+  } catch {
+    // ignore
+  }
 }

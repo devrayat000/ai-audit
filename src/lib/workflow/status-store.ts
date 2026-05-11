@@ -1,38 +1,5 @@
 import crypto from "node:crypto";
-import { isBlobConfigured } from "../storage/blob";
-
-interface BlobModule {
-  put: (
-    path: string,
-    body: string | Uint8Array,
-    opts: {
-      access: "public";
-      contentType?: string;
-      addRandomSuffix?: boolean;
-      allowOverwrite?: boolean;
-      cacheControlMaxAge?: number;
-      token?: string;
-    },
-  ) => Promise<{ url: string; pathname: string }>;
-  head: (
-    pathnameOrUrl: string,
-    opts?: { token?: string },
-  ) => Promise<{ url: string; pathname: string; size: number; uploadedAt: Date }>;
-  list: (opts?: { prefix?: string; limit?: number; token?: string }) => Promise<{
-    blobs: Array<{ url: string; pathname: string; size: number; uploadedAt: Date }>;
-  }>;
-}
-
-async function loadBlob(): Promise<BlobModule | null> {
-  try {
-    const moduleName = "@vercel/blob";
-    const mod = (await import(/* webpackIgnore: true */ moduleName)) as BlobModule;
-    if (typeof mod.put === "function") return mod;
-    return null;
-  } catch {
-    return null;
-  }
-}
+import { blob, blobToken, isBlobConfigured } from "../storage/blob";
 
 export type RunKind = "regen" | "deploy" | "publish";
 export type RunState = "queued" | "running" | "completed" | "failed";
@@ -80,9 +47,12 @@ export function buildInitialStatus<T = unknown>(
 }
 
 export async function writeRunStatus<T = unknown>(status: RunStatus<T>): Promise<string | null> {
-  if (!isBlobConfigured()) return null;
-  const blob = await loadBlob();
-  if (!blob) return null;
+  if (!isBlobConfigured()) {
+    console.warn(
+      "[workflow/status-store] BLOB_READ_WRITE_TOKEN not set — run status write skipped.",
+    );
+    return null;
+  }
   const next = { ...status, updatedAt: new Date().toISOString() };
   const key = statusKey(next.kind, next.runId);
   try {
@@ -92,44 +62,31 @@ export async function writeRunStatus<T = unknown>(status: RunStatus<T>): Promise
       addRandomSuffix: false,
       allowOverwrite: true,
       cacheControlMaxAge: 5,
-      token: process.env.BLOB_READ_WRITE_TOKEN,
+      token: blobToken(),
     });
     return r.url;
-  } catch {
+  } catch (e) {
+    console.error("[workflow/status-store] put failed", e);
     return null;
   }
 }
 
 async function findStatusUrl(kind: RunKind, runId: string): Promise<string | null> {
   if (!isBlobConfigured()) return null;
-  const blob = await loadBlob();
-  if (!blob) return null;
   const pathname = statusKey(kind, runId);
-  // Prefer head() — direct lookup by pathname.
-  if (typeof blob.head === "function") {
-    try {
-      const meta = await blob.head(pathname, {
-        token: process.env.BLOB_READ_WRITE_TOKEN,
-      });
-      return meta.url;
-    } catch {
-      // Fall through to list().
-    }
+  try {
+    const meta = await blob.head(pathname, { token: blobToken() });
+    return meta.url;
+  } catch {
+    // fall through
   }
-  if (typeof blob.list === "function") {
-    try {
-      const r = await blob.list({
-        prefix: pathname,
-        limit: 1,
-        token: process.env.BLOB_READ_WRITE_TOKEN,
-      });
-      const found = r.blobs.find((b) => b.pathname === pathname) ?? r.blobs[0];
-      return found?.url ?? null;
-    } catch {
-      return null;
-    }
+  try {
+    const r = await blob.list({ prefix: pathname, limit: 1, token: blobToken() });
+    const found = r.blobs.find((b) => b.pathname === pathname) ?? r.blobs[0];
+    return found?.url ?? null;
+  } catch {
+    return null;
   }
-  return null;
 }
 
 export async function readRunStatus<T = unknown>(
