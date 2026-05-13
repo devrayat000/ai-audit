@@ -5,6 +5,7 @@ import {
   isBlobConfigured,
 } from "../storage/blob";
 import type { PublishedSite } from "./types";
+import { cache } from "react";
 
 export function isValidSubdomain(sub: string): boolean {
   return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(sub) && sub.length <= 63;
@@ -38,7 +39,7 @@ export async function writePublishedSite(site: PublishedSite): Promise<string> {
   return r.url;
 }
 
-async function discoverSiteBlobUrl(subdomain: string): Promise<string | null> {
+const discoverSiteBlobUrl = cache(async (subdomain: string) => {
   if (!isBlobConfigured()) return null;
   const pathname = siteKey(subdomain);
   try {
@@ -48,15 +49,19 @@ async function discoverSiteBlobUrl(subdomain: string): Promise<string | null> {
     // head() throws for not-found; fall back to list() for older API quirks.
   }
   try {
-    const r = await blob.list({ prefix: pathname, limit: 1, token: blobToken() });
+    const r = await blob.list({
+      prefix: pathname,
+      limit: 1,
+      token: blobToken(),
+    });
     const found = r.blobs.find((b) => b.pathname === pathname) ?? r.blobs[0];
     return found?.url ?? null;
   } catch {
     return null;
   }
-}
+});
 
-export async function readPublishedSite(subdomain: string): Promise<PublishedSite | null> {
+export const readPublishedSite = cache(async (subdomain: string) => {
   if (!isValidSubdomain(subdomain)) return null;
   const url = await discoverSiteBlobUrl(subdomain);
   if (!url) return null;
@@ -67,7 +72,7 @@ export async function readPublishedSite(subdomain: string): Promise<PublishedSit
   } catch {
     return null;
   }
-}
+});
 
 export async function listPublishedSites(): Promise<
   Array<{ subdomain: string; url: string; uploadedAt: string }>
@@ -84,9 +89,25 @@ export async function listPublishedSites(): Promise<
 }
 
 const RESERVED_SUBDOMAINS = new Set([
-  "www", "api", "app", "admin", "mail", "blog", "ftp",
-  "ns1", "ns2", "ns3", "ns4", "smtp", "pop", "imap",
-  "test", "dev", "staging", "preview", "sites",
+  "www",
+  "api",
+  "app",
+  "admin",
+  "mail",
+  "blog",
+  "ftp",
+  "ns1",
+  "ns2",
+  "ns3",
+  "ns4",
+  "smtp",
+  "pop",
+  "imap",
+  "test",
+  "dev",
+  "staging",
+  "preview",
+  "sites",
 ]);
 
 export function isReservedSubdomain(sub: string): boolean {
@@ -121,7 +142,8 @@ export async function findAvailableSubdomain(
 
   for (let i = 0; i < maxAttempts; i++) {
     const candidate = `${base}-${randomSuffix(3 + Math.floor(i / 3))}`;
-    if (!isValidSubdomain(candidate) || isReservedSubdomain(candidate)) continue;
+    if (!isValidSubdomain(candidate) || isReservedSubdomain(candidate))
+      continue;
     const taken = await readPublishedSite(candidate);
     if (!taken) return candidate;
   }
