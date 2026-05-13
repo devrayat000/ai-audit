@@ -7,6 +7,7 @@ import {
 import { buildPublishedSite, type PublishInput } from "@/lib/sites/publish";
 import { writePublishedSite } from "@/lib/sites/storage";
 import { applyEnrichment, enrichWithAudit } from "@/lib/sites/ai-enrich";
+import { translateSiteToEnglish } from "@/lib/sites/translator";
 import type { PublishedSite } from "@/lib/sites/types";
 import type { AuditReport } from "@/lib/types";
 
@@ -40,7 +41,8 @@ export async function publishSiteWorkflow(
   await initPublishRun(runId, input);
   try {
     const scraped = await scrapeStep(runId, input);
-    const enriched = await enrichStep(runId, scraped, input.audit);
+    const translated = await translateStep(runId, scraped);
+    const enriched = await enrichStep(runId, translated, input.audit);
     return await persistStep(runId, enriched);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -112,6 +114,48 @@ async function scrapeStep(
     meta,
   });
   return site;
+}
+
+async function translateStep(
+  runId: string,
+  site: PublishedSite,
+): Promise<PublishedSite> {
+  "use step";
+  if (site.source?.isEnglish) {
+    const skipMsg = "Source already in English — skipping translation.";
+    await patchRunStatus<PublishedSite>("publish", runId, {
+      state: "running",
+      message: skipMsg,
+      progress: 62,
+    });
+    await emit({ state: "running", message: skipMsg, progress: 62 });
+    return { ...site, translated: true };
+  }
+  const startMsg = `Translating ${site.source?.language ?? "source"} → English…`;
+  await patchRunStatus<PublishedSite>("publish", runId, {
+    state: "running",
+    message: startMsg,
+    progress: 62,
+  });
+  await emit({ state: "running", message: startMsg, progress: 62 });
+
+  const { site: out, notes } = await translateSiteToEnglish(site);
+  const doneMsg = out.translated
+    ? "Translated to English."
+    : notes[0] ?? "Translation step finished.";
+  await patchRunStatus<PublishedSite>("publish", runId, {
+    state: "running",
+    message: doneMsg,
+    progress: 70,
+    meta: { translateNotes: notes },
+  });
+  await emit({
+    state: "running",
+    message: doneMsg,
+    progress: 70,
+    meta: { translateNotes: notes },
+  });
+  return out;
 }
 
 async function enrichStep(

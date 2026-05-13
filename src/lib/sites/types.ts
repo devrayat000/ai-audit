@@ -62,6 +62,17 @@ export interface SocialLinks {
   line?: string;
 }
 
+export interface DetectedSourceLanguage {
+  /** ISO 639-1 code (or "und" when not determined). */
+  language: string;
+  /** ISO 15924 script. */
+  script: string;
+  /** "ltr" | "rtl" — currently informational only on the template side. */
+  direction: "ltr" | "rtl";
+  /** True if we already saw English text in the source — translation can short-circuit. */
+  isEnglish: boolean;
+}
+
 export interface RestaurantData {
   industry: "restaurant";
   name: string;
@@ -134,6 +145,10 @@ export interface PublishedSite {
   subdomain: string;
   industry: SiteIndustry;
   sourceUrl: string;
+  /** Detected source-language metadata (pre-translation). */
+  source?: DetectedSourceLanguage;
+  /** True once the data fields have been translated to English. */
+  translated?: boolean;
   /** ISO timestamps */
   scrapedAt: string;
   updatedAt: string;

@@ -1,5 +1,5 @@
 import * as cheerio from "cheerio";
-import type { CheerioAPI } from "cheerio";
+import type { CheerioAPI, Cheerio } from "cheerio";
 import type { Element } from "domhandler";
 import type { PageData, SiteData } from "../types";
 import { parseSchemaFromHtml } from "../analyzers/schema-markup";
@@ -258,28 +258,103 @@ function expandDayRange(startKey: string, endKey: string): OpeningHour["day"][] 
   return [...order.slice(si), ...order.slice(0, ei + 1)];
 }
 
+function isPlaceholderUrl(url: string): boolean {
+  if (/^(data:|blob:)/i.test(url)) return true;
+  if (/(^|\/)1x1\.(gif|png)/i.test(url)) return true;
+  if (/transparent\.(gif|png)/i.test(url)) return true;
+  if (/placeholder/i.test(url) && /\.(gif|svg)$/i.test(url)) return true;
+  return false;
+}
+
+function pickFromSrcset(srcset: string): string | null {
+  // Pick the LARGEST candidate. Each entry: "URL width" or "URL density".
+  const parts = srcset.split(",").map((p) => p.trim()).filter(Boolean);
+  let best: { url: string; weight: number } | null = null;
+  for (const part of parts) {
+    const [url, descRaw] = part.split(/\s+/);
+    if (!url) continue;
+    const desc = descRaw ?? "1x";
+    const m = desc.match(/^(\d+(?:\.\d+)?)(w|x)$/i);
+    const weight = m ? parseFloat(m[1]) * (m[2].toLowerCase() === "w" ? 1 : 1000) : 0;
+    if (!best || weight > best.weight) best = { url, weight };
+  }
+  return best?.url ?? null;
+}
+
+const LAZY_ATTRS = [
+  "data-src",
+  "data-original",
+  "data-lazy-src",
+  "data-lazy",
+  "data-defer-src",
+  "data-srcset",
+  "data-original-src",
+  "data-actualsrc",
+  "data-hi-res-src",
+] as const;
+
+function pickImgUrl($el: Cheerio<Element>): string | null {
+  // Order of preference: srcset (largest) → lazy-load attrs → src.
+  const srcset = ($el.attr("srcset") ?? "").trim();
+  if (srcset) {
+    const best = pickFromSrcset(srcset);
+    if (best && !isPlaceholderUrl(best)) return best;
+  }
+  for (const attr of LAZY_ATTRS) {
+    const v = ($el.attr(attr) ?? "").trim();
+    if (!v || isPlaceholderUrl(v)) continue;
+    if (attr === "data-srcset") {
+      const best = pickFromSrcset(v);
+      if (best) return best;
+    } else {
+      return v;
+    }
+  }
+  const src = ($el.attr("src") ?? "").trim();
+  if (src && !isPlaceholderUrl(src)) return src;
+  return null;
+}
+
 function extractGalleryFromPages(pages: PageData[], rootUrl: string): ImageRef[] {
   const refs: ImageRef[] = [];
   for (const page of pages) {
     const html = page.renderedHtml || page.rawHtml;
     if (!html) continue;
     const $ = cheerio.load(html);
-    $("img").each((_, el) => {
-      const src = ($(el).attr("src") ?? "").trim();
-      const alt = clean($(el).attr("alt"));
-      if (!src) return;
-      if (/^(data:|blob:)/i.test(src)) return;
-      const abs = resolveUrl(page.url, src) ?? src;
-      // filter: drop very small, sprite-like or icon URLs heuristically
-      const looksIcon = /icon|sprite|logo[-_.]?small|favicon|emoji/i.test(abs);
-      if (looksIcon) return;
-      refs.push({ url: abs, alt });
-    });
-    // og:image as fallback
-    const og = $('meta[property="og:image"]').attr("content");
+
+    // og:image first — most reliable.
+    const og = $('meta[property="og:image"]').attr("content")?.trim();
     if (og) {
       refs.push({ url: resolveUrl(page.url, og) ?? og, alt: undefined });
     }
+    const twitter = $('meta[name="twitter:image"]').attr("content")?.trim();
+    if (twitter) {
+      refs.push({ url: resolveUrl(page.url, twitter) ?? twitter, alt: undefined });
+    }
+
+    // <picture><source srcset> — preferred image when available.
+    $("picture source[srcset]").each((_, el) => {
+      const srcset = ($(el).attr("srcset") ?? "").trim();
+      if (!srcset) return;
+      const best = pickFromSrcset(srcset);
+      if (!best || isPlaceholderUrl(best)) return;
+      const abs = resolveUrl(page.url, best) ?? best;
+      const alt = clean($(el).closest("picture").find("img").attr("alt"));
+      refs.push({ url: abs, alt });
+    });
+
+    // <img> with lazy/srcset awareness.
+    $("img").each((_, el) => {
+      const $el = $(el);
+      const url = pickImgUrl($el);
+      if (!url) return;
+      const alt = clean($el.attr("alt"));
+      const abs = resolveUrl(page.url, url) ?? url;
+      // filter: drop very small, sprite-like or favicon URLs heuristically.
+      const looksIcon = /(?:^|\/)(?:favicon|sprite|emoji)(?:[-_.]|$)|icon-?\d+x\d+/i.test(abs);
+      if (looksIcon) return;
+      refs.push({ url: abs, alt });
+    });
     void rootUrl;
   }
   return uniq(refs, (r) => r.url).slice(0, 24);
