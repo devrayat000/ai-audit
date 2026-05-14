@@ -71,16 +71,25 @@ export function detectSourceLanguage(homepageHtml: string): DetectedSourceLangua
   const script = detectScript(text);
   const langFromScript = fallbackLanguageFromScript(script);
   const englishVibe = script === "Latn" && looksEnglish(text);
+  // ANY non-Latin character anywhere in the body forces translation,
+  // even if the dominant script is Latin (e.g. Japanese menu items on a
+  // mostly-English page). htmlLang=en is unreliable — many sites set it
+  // by default; we ignore it when foreign script is present.
+  const hasForeignScript =
+    /[ঀ-৿ऀ-ॿ؀-ۿݐ-ݿ֐-׿฀-๿぀-ゟ゠-ヿ가-힯一-鿿Ѐ-ӿͰ-Ͽ]/.test(
+      text,
+    );
 
   const language =
-    htmlLang ||
-    (englishVibe ? "en" : langFromScript);
+    hasForeignScript
+      ? langFromScript
+      : htmlLang || (englishVibe ? "en" : langFromScript);
 
   let direction: "ltr" | "rtl" = "ltr";
   if (dirAttr === "rtl") direction = "rtl";
   else if (RTL_LANGS.has(language)) direction = "rtl";
 
-  const isEnglish = language === "en" || (script === "Latn" && englishVibe);
+  const isEnglish = !hasForeignScript && (language === "en" || (script === "Latn" && englishVibe));
 
   return { language: language || "und", script, direction, isEnglish };
 }

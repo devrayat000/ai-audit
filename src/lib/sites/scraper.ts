@@ -315,6 +315,22 @@ function pickImgUrl($el: Cheerio<Element>): string | null {
   return null;
 }
 
+function pushAbsImage(
+  refs: ImageRef[],
+  pageUrl: string,
+  raw: string,
+  alt?: string,
+): void {
+  if (!raw) return;
+  if (isPlaceholderUrl(raw)) return;
+  const abs = resolveUrl(pageUrl, raw);
+  if (!abs || !/^https?:\/\//i.test(abs)) return;
+  const looksIcon =
+    /(?:^|\/)(?:favicon|sprite|emoji|spinner|loader)(?:[-_.]|$)|icon-?\d+x\d+/i.test(abs);
+  if (looksIcon) return;
+  refs.push({ url: abs, alt });
+}
+
 function extractGalleryFromPages(pages: PageData[], rootUrl: string): ImageRef[] {
   const refs: ImageRef[] = [];
   for (const page of pages) {
@@ -324,23 +340,18 @@ function extractGalleryFromPages(pages: PageData[], rootUrl: string): ImageRef[]
 
     // og:image first — most reliable.
     const og = $('meta[property="og:image"]').attr("content")?.trim();
-    if (og) {
-      refs.push({ url: resolveUrl(page.url, og) ?? og, alt: undefined });
-    }
+    if (og) pushAbsImage(refs, page.url, og);
     const twitter = $('meta[name="twitter:image"]').attr("content")?.trim();
-    if (twitter) {
-      refs.push({ url: resolveUrl(page.url, twitter) ?? twitter, alt: undefined });
-    }
+    if (twitter) pushAbsImage(refs, page.url, twitter);
 
     // <picture><source srcset> — preferred image when available.
     $("picture source[srcset]").each((_, el) => {
       const srcset = ($(el).attr("srcset") ?? "").trim();
       if (!srcset) return;
       const best = pickFromSrcset(srcset);
-      if (!best || isPlaceholderUrl(best)) return;
-      const abs = resolveUrl(page.url, best) ?? best;
+      if (!best) return;
       const alt = clean($(el).closest("picture").find("img").attr("alt"));
-      refs.push({ url: abs, alt });
+      pushAbsImage(refs, page.url, best, alt);
     });
 
     // <img> with lazy/srcset awareness.
@@ -349,24 +360,27 @@ function extractGalleryFromPages(pages: PageData[], rootUrl: string): ImageRef[]
       const url = pickImgUrl($el);
       if (!url) return;
       const alt = clean($el.attr("alt"));
-      const abs = resolveUrl(page.url, url) ?? url;
-      // filter: drop very small, sprite-like or favicon URLs heuristically.
-      const looksIcon = /(?:^|\/)(?:favicon|sprite|emoji)(?:[-_.]|$)|icon-?\d+x\d+/i.test(abs);
-      if (looksIcon) return;
-      refs.push({ url: abs, alt });
+      pushAbsImage(refs, page.url, url, alt);
     });
+
+    // CSS background-image on style attributes (hero images commonly).
+    $("[style*='background']").each((_, el) => {
+      const style = $(el).attr("style") ?? "";
+      const m = style.match(/background(?:-image)?\s*:\s*url\((['"]?)([^'")]+)\1\)/i);
+      if (!m) return;
+      pushAbsImage(refs, page.url, m[2].trim());
+    });
+
     void rootUrl;
   }
   return uniq(refs, (r) => r.url).slice(0, 24);
 }
 
-function pickHeroImage(gallery: ImageRef[], homepageHtml: string): ImageRef | undefined {
-  const $ = cheerio.load(homepageHtml);
-  const og = $('meta[property="og:image"]').attr("content");
-  if (og) return { url: og };
-  // pick first image whose alt or src looks "hero-y"
+function pickHeroImage(gallery: ImageRef[]): ImageRef | undefined {
+  // gallery is already absolutized + og:image is gallery[0]. Pick hero-ish
+  // alt/url candidate, else fall back to first gallery image.
   const candidate = gallery.find((g) =>
-    /(hero|banner|cover|kv|main|top)/i.test(`${g.url} ${g.alt ?? ""}`),
+    /(hero|banner|cover|kv|main|top|featured)/i.test(`${g.url} ${g.alt ?? ""}`),
   );
   return candidate ?? gallery[0];
 }
@@ -534,7 +548,7 @@ export function scrapeRestaurant(
   const cuisine = cuisineRaw ? [cuisineRaw] : undefined;
 
   const gallery = extractGalleryFromPages(pages, site.rootUrl);
-  const heroImage = pickHeroImage(gallery, html);
+  const heroImage = pickHeroImage(gallery);
 
   const heading = clean($("h1").first().text()) ?? name;
   const heroSub =

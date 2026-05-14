@@ -22,28 +22,72 @@ export interface RenderOptions {
 }
 
 let browserPromise: Promise<Browser> | null = null;
+let browserUnavailableReason: string | null = null;
 
-async function getBrowser(): Promise<Browser> {
+async function getBrowser(): Promise<Browser | null> {
+  if (browserUnavailableReason) return null;
   if (!browserPromise) {
     if (process.env.VERCEL) {
-      browserPromise = chromium.connectOverCDP(
-        `wss://production-sfo.browserless.io?token=${process.env.BROWSERLESS_API_KEY}`,
-      );
+      const token = process.env.BROWSERLESS_API_KEY;
+      if (!token) {
+        browserUnavailableReason =
+          "BROWSERLESS_API_KEY is not set on Vercel — Playwright cannot connect.";
+        return null;
+      }
+      browserPromise = chromium
+        .connectOverCDP(`wss://production-sfo.browserless.io?token=${token}`)
+        .catch((e: unknown) => {
+          browserUnavailableReason = `Browserless connect failed: ${
+            e instanceof Error ? e.message : String(e)
+          }`;
+          browserPromise = null;
+          throw e;
+        });
     } else {
-      browserPromise = chromium.launch({ headless: true });
+      browserPromise = chromium
+        .launch({ headless: true })
+        .catch((e: unknown) => {
+          browserUnavailableReason = `Local chromium launch failed: ${
+            e instanceof Error ? e.message : String(e)
+          }. Install with: pnpm exec playwright install chromium`;
+          browserPromise = null;
+          throw e;
+        });
     }
   }
-  return browserPromise;
+  try {
+    return await browserPromise;
+  } catch {
+    return null;
+  }
 }
 
 export async function closeBrowser(): Promise<void> {
   if (browserPromise) {
     try {
       const b = await browserPromise;
-      await b.close();
+      if (b) await b.close();
     } catch {}
     browserPromise = null;
   }
+}
+
+function emptyRender(
+  url: string,
+  t0: number,
+  reason: string,
+): RenderResult {
+  return {
+    url,
+    finalUrl: url,
+    status: 0,
+    renderedHtml: "",
+    renderedText: "",
+    responseHeaders: {},
+    loadTimeMs: Date.now() - t0,
+    links: [],
+    error: reason,
+  };
 }
 
 export async function renderPage(
@@ -52,13 +96,29 @@ export async function renderPage(
 ): Promise<RenderResult> {
   const t0 = Date.now();
   const browser = await getBrowser();
-  const ctx = await browser.newContext({
-    userAgent: DEFAULT_HUMAN_UA,
-    viewport: {
-      width: opts.viewportWidth ?? 1280,
-      height: opts.viewportHeight ?? 800,
-    },
-  });
+  if (!browser) {
+    return emptyRender(
+      url,
+      t0,
+      browserUnavailableReason ?? "Browser unavailable",
+    );
+  }
+  let ctx: Awaited<ReturnType<Browser["newContext"]>>;
+  try {
+    ctx = await browser.newContext({
+      userAgent: DEFAULT_HUMAN_UA,
+      viewport: {
+        width: opts.viewportWidth ?? 1280,
+        height: opts.viewportHeight ?? 800,
+      },
+    });
+  } catch (e) {
+    return emptyRender(
+      url,
+      t0,
+      `newContext failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
   const page = await ctx.newPage();
   let status = 0;
   let responseHeaders: Record<string, string> = {};

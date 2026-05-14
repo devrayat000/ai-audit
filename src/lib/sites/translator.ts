@@ -195,16 +195,36 @@ function extractJsonObject(text: string): string {
   return text.slice(start, end + 1);
 }
 
-const SYSTEM_PROMPT = `You translate scraped restaurant / business site content into clean, idiomatic English.
+const SYSTEM_PROMPT = `You translate scraped restaurant/business content into clean, idiomatic English for FOREIGN TOURISTS who cannot read the source language.
+
+AUDIENCE: international travelers planning a visit. They need to understand every dish, every section title, every description in English. Nothing should be left in a foreign language.
 
 Hard rules:
 - Output ONLY a single JSON object matching the input shape exactly. No prose, no markdown fences.
-- Translate every natural-language string value into English.
-- Do NOT translate or modify: numbers, prices, dates, addresses (street + postal code), emails, URLs, phone numbers, social handles. Keep these byte-identical.
-- Proper nouns (business name, dish names, place names, person names): keep verbatim. If the original already includes a Latin transliteration in parentheses, you may use it.
-- If a string is already English, return it unchanged.
-- NEVER invent facts. If the source has "established in 1985", output "established in 1985" — never "with decades of history" or "in the mid-1980s".
-- Keep arrays the same length and in the same order. Empty / null string fields stay empty / null.`;
+- Translate EVERY natural-language string into English. No foreign-script characters may remain in the output — not in menu items, not in headings, not in descriptions, not in section titles. If you see CJK / Cyrillic / Arabic / Thai / Hangul / Devanagari etc. in a value, you MUST translate or transliterate it.
+
+Dish names (CRITICAL):
+- Format: "English Translation (Romanized Original)" when there is a recognizable English equivalent.
+  - "Beef Pho (Phở Bò)"
+  - "Spicy Tuna Roll (Karai Maguro Maki)"
+  - "Grilled Beef Skewers (Yakitori)"
+- If the dish has no English equivalent, give a short descriptive English name + romanization in parens.
+  - "Cold Buckwheat Noodles (Zaru Soba)"
+  - "Sweet Bean Pancake (Hotteok)"
+- Always include a 1-sentence English description explaining what the dish IS (key ingredients, cooking method, taste) — even if the source had no description. This is essential for tourists. Keep it factual, do not invent specific ingredients not in the source; if unsure, describe by category ("a traditional Korean rice porridge").
+- Romanize using the standard system for the language (Hepburn for Japanese, Pinyin for Mandarin, Revised Romanization for Korean, etc.). NEVER leave the original script.
+
+Business / place names:
+- Keep the proper name. If it's in foreign script, add a romanization in parens on first mention.
+
+Preserve byte-identical:
+- numbers, prices, currencies, dates, addresses (street + postal code), emails, URLs, phone numbers, social handles.
+
+Other:
+- Use clean, idiomatic English — not literal word-for-word translation. Read naturally for a native English speaker.
+- NEVER invent facts. If source says "established in 1985", output "established in 1985" — never "with decades of history".
+- Keep arrays the same length and in the same order. Empty/null fields stay empty/null.
+- If a string is already English, return it unchanged.`;
 
 export async function translateSiteToEnglish(
   site: PublishedSite,
@@ -241,7 +261,7 @@ export async function translateSiteToEnglish(
   try {
     const res = await claude.messages.create({
       model: "claude-opus-4-7",
-      max_tokens: 4096,
+      max_tokens: 16384,
       system: SYSTEM_PROMPT,
       messages: [{ role: "user", content: userMsg }],
     });
