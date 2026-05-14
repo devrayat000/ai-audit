@@ -84,7 +84,7 @@ export function RestaurantTemplate({ site }: Props) {
         {heroImg && (
           <img
             src={heroImg}
-            alt=""
+            alt={`${d.name}${d.cuisine?.length ? ` — ${d.cuisine.join(", ")} restaurant` : " restaurant"}${d.contact.city ? ` in ${d.contact.city}` : ""}`}
             className="absolute inset-0 -z-10 h-full w-full object-cover brightness-[0.45]"
             loading="eager"
             decoding="async"
@@ -141,7 +141,7 @@ export function RestaurantTemplate({ site }: Props) {
 
       {/* About + summary */}
       {(site.geo?.summary || site.geo?.about || d.about || (d.highlights && d.highlights.length > 0)) && (
-        <section id="about" className="mx-auto max-w-6xl px-4 py-20 md:px-6 md:py-24">
+        <article id="about" className="mx-auto max-w-6xl px-4 py-20 md:px-6 md:py-24">
           <div className="text-xs uppercase tracking-[0.32em] text-muted-foreground">
             Our story
           </div>
@@ -187,7 +187,7 @@ export function RestaurantTemplate({ site }: Props) {
               </div>
             )}
           </div>
-        </section>
+        </article>
       )}
 
       {/* Menu */}
