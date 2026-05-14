@@ -1,29 +1,14 @@
+import Anthropic from "@anthropic-ai/sdk";
 import type { AuditReport, CheckResult } from "../types";
 import type { GeoEnrichment, PublishedSite, RestaurantData } from "./types";
 
-interface ClaudeClient {
-  messages: {
-    create(args: {
-      model: string;
-      max_tokens: number;
-      system: string;
-      messages: { role: "user"; content: string }[];
-    }): Promise<{ content: Array<{ type: string; text?: string }> }>;
-  };
-}
-
-async function loadAnthropic(apiKey: string): Promise<ClaudeClient | null> {
+function getClient(): Anthropic | null {
+  const apiKey = process.env.ANTHROPIC_API_KEY ?? "";
   if (!apiKey) return null;
   try {
-    const moduleName = "@anthropic-ai/sdk";
-    const mod = (await import(/* webpackIgnore: true */ moduleName)) as {
-      default?: { new (cfg: { apiKey: string }): ClaudeClient };
-    } & { new (cfg: { apiKey: string }): ClaudeClient };
-    const Ctor =
-      mod.default ??
-      (mod as unknown as { new (cfg: { apiKey: string }): ClaudeClient });
-    return new Ctor({ apiKey });
-  } catch {
+    return new Anthropic({ apiKey });
+  } catch (e) {
+    console.warn("[ai-enrich] Anthropic init failed:", e);
     return null;
   }
 }
@@ -91,7 +76,7 @@ function buildPrompt(site: PublishedSite, findings: CheckResult[]): string {
     "- Keep all numbers, prices, addresses, phone numbers, emails, URLs byte-identical.",
     "- Keep proper nouns (business name, dish names, place names) verbatim.",
     "- If you don't have enough info to answer a FAQ, OMIT it. No filler.",
-    "- All output in the same language as the source content.",
+    "- ALL OUTPUT MUST BE IN ENGLISH. The audience is international tourists. No foreign-script characters anywhere in summary, about, faqs, hero, or meta. Translate or romanize any non-English term in the input before quoting it.",
     "",
     "Output a single JSON object with this shape (no markdown fences, no commentary):",
     "{",
@@ -140,14 +125,13 @@ export async function enrichWithAudit(
   site: PublishedSite,
   report?: AuditReport,
 ): Promise<GeoEnrichment> {
-  const apiKey = process.env.ANTHROPIC_API_KEY ?? "";
-  const claude = await loadAnthropic(apiKey);
+  const claude = getClient();
   const findings = relevantAuditFindings(report);
 
   const notes: string[] = [];
   if (!claude) {
     notes.push(
-      "ANTHROPIC_API_KEY not set / @anthropic-ai/sdk not loaded — skipped Claude enrichment.",
+      "ANTHROPIC_API_KEY not set or SDK init failed — skipped Claude enrichment.",
     );
     return { notes };
   }
@@ -161,7 +145,10 @@ export async function enrichWithAudit(
         "You are a meticulous GEO editor. Output ONLY a single JSON object. No prose, no markdown fences.",
       messages: [{ role: "user", content: prompt }],
     });
-    const txt = res.content.map((c) => c.text ?? "").join("").trim();
+    const txt = res.content
+      .map((c) => ("text" in c && typeof c.text === "string" ? c.text : ""))
+      .join("")
+      .trim();
     const json = extractJsonObject(txt);
     const parsed = JSON.parse(json) as RawEnrichment;
 

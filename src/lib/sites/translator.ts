@@ -1,114 +1,99 @@
 /**
- * Translate the scraped site's user-facing strings into English.
+ * Translate scraped site content into English for foreign tourists.
  *
- * Strategy: instead of walking every node and batching, we send the
- * structured PublishedSite JSON to Claude and ask for the same shape back
- * with English string values. This is one API call per publish (~tokens
- * proportional to the site's text content).
+ * Strategy: chunked translation. Big menus blow past output token limits
+ * if we ask Claude to translate the entire PublishedSite in one call.
+ * We split into:
+ *   1. core fields (name, tagline, description, hero, about, highlights,
+ *      contact city/region/country, gallery alts) — one call
+ *   2. menu items — batched, ~12 items per call
+ * Each call has its own bounded output budget, and a failure in one
+ * batch does not nuke the whole translation.
  *
- * Hard rules in the prompt:
- *   - Translate text fields only. Keep all keys / shape identical.
- *   - Preserve numbers, prices, dates, addresses, emails, URLs, phone
- *     numbers byte-identical.
- *   - Keep proper nouns verbatim (business name, dish names, place names)
- *     unless they have an unambiguous English form already in common use.
- *   - Never invent facts not in the source.
- *
- * If Claude is unavailable, we no-op and return the site unchanged.
+ * Hard rules in the prompt — same in every call:
+ *   - Translate every natural-language string to English. NO foreign
+ *     script may remain in the output.
+ *   - Numbers, prices, dates, addresses (street + postal), emails, URLs,
+ *     phone numbers, social handles: byte-identical.
+ *   - Proper nouns / dish names: "English Translation (Romanized Original)"
+ *     plus a 1-sentence English description.
+ *   - Never invent facts.
  */
-import type { PublishedSite, RestaurantData } from "./types";
+import Anthropic from "@anthropic-ai/sdk";
+import type {
+  MenuItem,
+  MenuSection,
+  PublishedSite,
+  RestaurantData,
+} from "./types";
 
-interface ClaudeClient {
-  messages: {
-    create(args: {
-      model: string;
-      max_tokens: number;
-      system: string;
-      messages: { role: "user"; content: string }[];
-    }): Promise<{ content: Array<{ type: string; text?: string }> }>;
-  };
-}
+const MODEL = "claude-opus-4-7";
+const MENU_BATCH_SIZE = 12;
 
-async function loadAnthropic(apiKey: string): Promise<ClaudeClient | null> {
+function getClient(): Anthropic | null {
+  const apiKey = process.env.ANTHROPIC_API_KEY ?? "";
   if (!apiKey) return null;
   try {
-    const moduleName = "@anthropic-ai/sdk";
-    const mod = (await import(/* webpackIgnore: true */ moduleName)) as {
-      default?: { new (cfg: { apiKey: string }): ClaudeClient };
-    } & { new (cfg: { apiKey: string }): ClaudeClient };
-    const Ctor =
-      mod.default ??
-      (mod as unknown as { new (cfg: { apiKey: string }): ClaudeClient });
-    return new Ctor({ apiKey });
-  } catch {
+    return new Anthropic({ apiKey });
+  } catch (e) {
+    console.warn("[translator] Anthropic init failed:", e);
     return null;
   }
 }
 
-/**
- * Compact subset of PublishedSite that's safe to send to Claude — only the
- * fields that contain natural-language text. Pass through structure 1:1.
- */
-interface TranslatablePayload {
+function extractJsonObject(text: string): string {
+  // Be tolerant: strip ```json fences, find outermost {…}.
+  const cleaned = text
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/i, "")
+    .trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start < 0 || end < 0 || end <= start) return "{}";
+  return cleaned.slice(start, end + 1);
+}
+
+function hasForeignScript(s: string): boolean {
+  return /[ঀ-৿ऀ-ॿ؀-ۿݐ-ݿ֐-׿฀-๿぀-ゟ゠-ヿ가-힯一-鿿Ѐ-ӿͰ-Ͽ]/.test(s);
+}
+
+const COMMON_RULES = `You translate scraped restaurant content into clean, idiomatic English for FOREIGN TOURISTS who cannot read the source language.
+
+ABSOLUTE rules:
+- Output ONLY a single JSON object. No prose, no markdown fences, no commentary.
+- EVERY natural-language string MUST be in English. NO foreign-script characters (CJK / Cyrillic / Arabic / Thai / Hangul / Devanagari / Bengali / Greek / etc.) may appear in any output value. If you see them in input, you MUST translate or romanize them. This is non-negotiable.
+- Dish names: "English Name (Romanized Original)". Examples: "Beef Pho (Phở Bò)", "Grilled Pork Belly (Samgyeopsal)", "Cold Buckwheat Noodles (Zaru Soba)". Use the standard romanization for the language (Hepburn for Japanese, Pinyin for Mandarin, Revised Romanization for Korean, Hanyu Pinyin for Chinese, etc.). If the dish has a widely-known English name (e.g. "Sushi"), keep the English name and omit the parenthetical.
+- Every menu item MUST have an English "description" field — a 1-sentence factual description of what the dish is (key ingredients / cooking method / category). If the source had no description, write a short factual one. NEVER invent specific ingredients not implied by the source; if unsure, describe by category (e.g. "a traditional Korean rice porridge").
+- Preserve byte-identical: numbers, prices, currencies, dates, street addresses, postal codes, emails, URLs, phone numbers, social handles.
+- Keep arrays the same length and in the same order. Empty/null fields stay empty/null.
+- Use natural, idiomatic English — not literal word-for-word translation.
+- Already-English strings: return unchanged.`;
+
+interface CorePayload {
   name: string;
   tagline?: string;
   description?: string;
   cuisine?: string[];
-  hero: {
-    heading?: string;
-    sub?: string;
-    ctaLabel?: string;
-  };
+  hero: { heading?: string; sub?: string; ctaLabel?: string };
   about?: string;
   highlights?: string[];
-  menuSections?: Array<{
-    title: string;
-    items: Array<{ name: string; description?: string }>;
-  }>;
-  contact?: {
-    street?: string;
-    city?: string;
-    region?: string;
-    country?: string;
-  };
+  contact: { street?: string; city?: string; region?: string; country?: string };
   galleryAlts: string[];
 }
 
-function projectToTranslatable(site: PublishedSite): TranslatablePayload {
+function projectCore(site: PublishedSite): CorePayload {
   const d = site.data;
-  if (d.industry === "restaurant") {
-    const r = d as RestaurantData;
-    return {
-      name: r.name,
-      tagline: r.tagline,
-      description: r.description,
-      cuisine: r.cuisine,
-      hero: {
-        heading: r.hero.heading,
-        sub: r.hero.sub,
-        ctaLabel: r.hero.cta?.label,
-      },
-      about: r.about,
-      highlights: r.highlights,
-      menuSections: r.menu?.sections.map((s) => ({
-        title: s.title,
-        items: s.items.map((it) => ({ name: it.name, description: it.description })),
-      })),
-      contact: {
-        street: r.contact.street,
-        city: r.contact.city,
-        region: r.contact.region,
-        country: r.contact.country,
-      },
-      galleryAlts: r.gallery.map((g) => g.alt ?? ""),
-    };
-  }
-  // general fallback
+  const r = d as RestaurantData;
   return {
     name: d.name,
     tagline: d.tagline,
     description: d.description,
-    hero: { heading: d.hero.heading, sub: d.hero.sub, ctaLabel: d.hero.cta?.label },
+    cuisine: d.industry === "restaurant" ? r.cuisine : undefined,
+    hero: {
+      heading: d.hero.heading,
+      sub: d.hero.sub,
+      ctaLabel: d.hero.cta?.label,
+    },
     about: d.about,
     highlights: d.highlights,
     contact: {
@@ -121,8 +106,8 @@ function projectToTranslatable(site: PublishedSite): TranslatablePayload {
   };
 }
 
-function applyTranslatable(site: PublishedSite, t: TranslatablePayload): PublishedSite {
-  const next: PublishedSite = { ...site, translated: true, updatedAt: new Date().toISOString() };
+function applyCore(site: PublishedSite, t: CorePayload): PublishedSite {
+  const next: PublishedSite = { ...site };
   const data = { ...next.data };
 
   data.name = t.name || data.name;
@@ -146,85 +131,198 @@ function applyTranslatable(site: PublishedSite, t: TranslatablePayload): Publish
     region: t.contact?.region ?? data.contact.region,
     country: t.contact?.country ?? data.contact.country,
   };
-  if (data.gallery && t.galleryAlts.length === data.gallery.length) {
+  if (
+    data.gallery &&
+    Array.isArray(t.galleryAlts) &&
+    t.galleryAlts.length === data.gallery.length
+  ) {
     data.gallery = data.gallery.map((g, i) => ({
       ...g,
       alt: t.galleryAlts[i] || g.alt,
     }));
   }
-
-  if (data.industry === "restaurant") {
-    data.cuisine = t.cuisine ?? data.cuisine;
-    if (data.menu && t.menuSections && t.menuSections.length === data.menu.sections.length) {
-      data.menu = {
-        sections: data.menu.sections.map((s, i) => {
-          const ts = t.menuSections![i];
-          if (!ts || ts.items.length !== s.items.length) return s;
-          return {
-            title: ts.title || s.title,
-            items: s.items.map((item, j) => ({
-              ...item,
-              name: ts.items[j]?.name || item.name,
-              description: ts.items[j]?.description ?? item.description,
-            })),
-          };
-        }),
-      };
-    }
+  if (data.industry === "restaurant" && t.cuisine) {
+    data.cuisine = t.cuisine;
   }
-
   next.data = data;
 
-  // Update meta with translated title/description if originals were swapped.
-  if (t.name) {
-    next.meta = {
-      ...next.meta,
-      title: data.name + (next.industry === "restaurant" ? " — Menu, hours & reservations" : ""),
-      description:
-        t.description ??
-        next.meta.description,
-    };
-  }
+  next.meta = {
+    ...next.meta,
+    title:
+      (data.name || next.meta.title) +
+      (next.industry === "restaurant" ? " — Menu, hours & reservations" : ""),
+    description: t.description ?? next.meta.description,
+  };
   return next;
 }
 
-function extractJsonObject(text: string): string {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end < 0 || end <= start) return "{}";
-  return text.slice(start, end + 1);
+async function callClaude(
+  client: Anthropic,
+  prompt: string,
+  maxTokens: number,
+): Promise<unknown> {
+  const res = await client.messages.create({
+    model: MODEL,
+    max_tokens: maxTokens,
+    system: COMMON_RULES,
+    messages: [{ role: "user", content: prompt }],
+  });
+  const txt = res.content
+    .map((c) => ("text" in c && typeof c.text === "string" ? c.text : ""))
+    .join("")
+    .trim();
+  return JSON.parse(extractJsonObject(txt));
 }
 
-const SYSTEM_PROMPT = `You translate scraped restaurant/business content into clean, idiomatic English for FOREIGN TOURISTS who cannot read the source language.
+async function translateCore(
+  client: Anthropic,
+  site: PublishedSite,
+  sourceLangHint: string,
+): Promise<CorePayload | null> {
+  const payload = projectCore(site);
+  const userMsg = [
+    sourceLangHint,
+    "",
+    "Translate this restaurant's CORE TEXT to English. Return the same JSON shape with English values.",
+    "",
+    "Input:",
+    "```json",
+    JSON.stringify(payload, null, 2),
+    "```",
+  ].join("\n");
+  try {
+    const parsed = (await callClaude(client, userMsg, 4096)) as CorePayload;
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch (e) {
+    console.warn("[translator] core call failed:", e);
+    return null;
+  }
+}
 
-AUDIENCE: international travelers planning a visit. They need to understand every dish, every section title, every description in English. Nothing should be left in a foreign language.
+interface MenuItemIn {
+  name: string;
+  description?: string;
+  price?: string;
+}
+interface MenuItemOut {
+  name: string;
+  description?: string;
+}
 
-Hard rules:
-- Output ONLY a single JSON object matching the input shape exactly. No prose, no markdown fences.
-- Translate EVERY natural-language string into English. No foreign-script characters may remain in the output — not in menu items, not in headings, not in descriptions, not in section titles. If you see CJK / Cyrillic / Arabic / Thai / Hangul / Devanagari etc. in a value, you MUST translate or transliterate it.
+async function translateMenuBatch(
+  client: Anthropic,
+  sectionTitle: string,
+  items: MenuItemIn[],
+  sourceLangHint: string,
+): Promise<MenuItemOut[] | null> {
+  const userMsg = [
+    sourceLangHint,
+    "",
+    `Translate this restaurant menu section to English. Section title: "${sectionTitle}".`,
+    "",
+    "For EACH item, return:",
+    '- "name": "English Name (Romanized Original)" — or English name alone if widely known in English.',
+    '- "description": one-sentence English description of what the dish IS. ALWAYS provide this, even if the source had none. NEVER leave it blank.',
+    "",
+    "Do NOT include prices — they stay byte-identical and we keep them on our side. Do NOT add new items.",
+    "",
+    "Input items (translate in the same order):",
+    "```json",
+    JSON.stringify(
+      items.map((i) => ({ name: i.name, description: i.description })),
+      null,
+      2,
+    ),
+    "```",
+    "",
+    "Return JSON with this exact shape:",
+    '{ "title": "translated section title", "items": [{"name": "...", "description": "..."}, ...] }',
+  ].join("\n");
+  try {
+    const parsed = (await callClaude(client, userMsg, 4096)) as {
+      title?: string;
+      items?: MenuItemOut[];
+    };
+    if (!parsed || !Array.isArray(parsed.items)) return null;
+    return parsed.items;
+  } catch (e) {
+    console.warn("[translator] menu batch failed:", e);
+    return null;
+  }
+}
 
-Dish names (CRITICAL):
-- Format: "English Translation (Romanized Original)" when there is a recognizable English equivalent.
-  - "Beef Pho (Phở Bò)"
-  - "Spicy Tuna Roll (Karai Maguro Maki)"
-  - "Grilled Beef Skewers (Yakitori)"
-- If the dish has no English equivalent, give a short descriptive English name + romanization in parens.
-  - "Cold Buckwheat Noodles (Zaru Soba)"
-  - "Sweet Bean Pancake (Hotteok)"
-- Always include a 1-sentence English description explaining what the dish IS (key ingredients, cooking method, taste) — even if the source had no description. This is essential for tourists. Keep it factual, do not invent specific ingredients not in the source; if unsure, describe by category ("a traditional Korean rice porridge").
-- Romanize using the standard system for the language (Hepburn for Japanese, Pinyin for Mandarin, Revised Romanization for Korean, etc.). NEVER leave the original script.
+async function translateMenuSectionTitle(
+  client: Anthropic,
+  title: string,
+  sourceLangHint: string,
+): Promise<string | null> {
+  if (!hasForeignScript(title)) return title;
+  const userMsg = [
+    sourceLangHint,
+    "",
+    `Translate this restaurant menu section title to English. Return: {"title": "..."}.`,
+    "",
+    `Input: ${JSON.stringify(title)}`,
+  ].join("\n");
+  try {
+    const parsed = (await callClaude(client, userMsg, 256)) as {
+      title?: string;
+    };
+    return parsed?.title ?? null;
+  } catch (e) {
+    console.warn("[translator] title call failed:", e);
+    return null;
+  }
+}
 
-Business / place names:
-- Keep the proper name. If it's in foreign script, add a romanization in parens on first mention.
+async function translateMenu(
+  client: Anthropic,
+  sections: MenuSection[],
+  sourceLangHint: string,
+): Promise<MenuSection[]> {
+  const out: MenuSection[] = [];
+  for (const section of sections) {
+    const translatedTitle =
+      (await translateMenuSectionTitle(
+        client,
+        section.title,
+        sourceLangHint,
+      )) ?? section.title;
 
-Preserve byte-identical:
-- numbers, prices, currencies, dates, addresses (street + postal code), emails, URLs, phone numbers, social handles.
-
-Other:
-- Use clean, idiomatic English — not literal word-for-word translation. Read naturally for a native English speaker.
-- NEVER invent facts. If source says "established in 1985", output "established in 1985" — never "with decades of history".
-- Keep arrays the same length and in the same order. Empty/null fields stay empty/null.
-- If a string is already English, return it unchanged.`;
+    const newItems: MenuItem[] = [];
+    for (let i = 0; i < section.items.length; i += MENU_BATCH_SIZE) {
+      const batch = section.items.slice(i, i + MENU_BATCH_SIZE);
+      const tr = await translateMenuBatch(
+        client,
+        section.title,
+        batch.map((it) => ({
+          name: it.name,
+          description: it.description,
+          price: it.price,
+        })),
+        sourceLangHint,
+      );
+      if (!tr || tr.length !== batch.length) {
+        // Partial failure — keep original for this batch so we don't lose
+        // items, then continue to next batch.
+        newItems.push(...batch);
+        continue;
+      }
+      for (let j = 0; j < batch.length; j++) {
+        const orig = batch[j];
+        const t = tr[j];
+        newItems.push({
+          ...orig,
+          name: t.name || orig.name,
+          description: t.description ?? orig.description,
+        });
+      }
+    }
+    out.push({ title: translatedTitle, items: newItems });
+  }
+  return out;
+}
 
 export async function translateSiteToEnglish(
   site: PublishedSite,
@@ -235,53 +333,69 @@ export async function translateSiteToEnglish(
     return { site: { ...site, translated: true }, notes };
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY ?? "";
-  const claude = await loadAnthropic(apiKey);
-  if (!claude) {
-    notes.push("ANTHROPIC_API_KEY missing — translation skipped, original language preserved.");
+  const client = getClient();
+  if (!client) {
+    notes.push(
+      "ANTHROPIC_API_KEY missing or SDK init failed — translation skipped, source language preserved.",
+    );
     return { site, notes };
   }
 
-  const payload = projectToTranslatable(site);
   const sourceLangHint = site.source?.language
-    ? `Source language code: ${site.source.language} (${site.source.script}).`
+    ? `Source language code: ${site.source.language} (script ${site.source.script}).`
     : "Source language: unknown — auto-detect.";
 
-  const userMsg = [
-    sourceLangHint,
-    "",
-    "Input JSON:",
-    "```json",
-    JSON.stringify(payload, null, 2),
-    "```",
-    "",
-    "Return the same JSON object, with string values translated to English. Preserve the exact structure and array order.",
-  ].join("\n");
-
-  try {
-    const res = await claude.messages.create({
-      model: "claude-opus-4-7",
-      max_tokens: 16384,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userMsg }],
-    });
-    const txt = res.content.map((c) => c.text ?? "").join("").trim();
-    const parsed = JSON.parse(extractJsonObject(txt)) as TranslatablePayload;
-    if (!parsed || typeof parsed !== "object") {
-      notes.push("Translation response was not a JSON object — keeping original.");
-      return { site, notes };
-    }
-    const translated = applyTranslatable(site, parsed);
-    notes.push(
-      `Translated from ${site.source?.language ?? "unknown"} → en (${
-        payload.menuSections
-          ? `${payload.menuSections.reduce((a, s) => a + s.items.length, 0)} menu items`
-          : "no menu"
-      }).`,
-    );
-    return { site: translated, notes };
-  } catch (e) {
-    notes.push(`Translation failed: ${e instanceof Error ? e.message : String(e)}`);
-    return { site, notes };
+  // 1) Core fields.
+  const core = await translateCore(client, site, sourceLangHint);
+  let working = site;
+  if (core) {
+    working = applyCore(site, core);
+    notes.push("Core fields translated.");
+  } else {
+    notes.push("Core translation failed — keeping original core text.");
   }
+
+  // 2) Menu items, batched.
+  if (
+    working.data.industry === "restaurant" &&
+    working.data.menu &&
+    working.data.menu.sections.length > 0
+  ) {
+    const r = working.data as RestaurantData;
+    const totalItems = r.menu!.sections.reduce(
+      (a, s) => a + s.items.length,
+      0,
+    );
+    try {
+      const sections = await translateMenu(
+        client,
+        r.menu!.sections,
+        sourceLangHint,
+      );
+      const data = { ...working.data, menu: { sections } };
+      working = { ...working, data };
+      notes.push(
+        `Menu translated: ${sections.length} section(s), ${totalItems} item(s).`,
+      );
+    } catch (e) {
+      notes.push(
+        `Menu translation error: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  // 3) Sanity check — flag any remaining foreign script in output.
+  const blob = JSON.stringify(working.data);
+  if (hasForeignScript(blob)) {
+    notes.push(
+      "Warning: some foreign-script characters remain in the output (likely proper nouns we left verbatim).",
+    );
+  }
+
+  working = {
+    ...working,
+    translated: true,
+    updatedAt: new Date().toISOString(),
+  };
+  return { site: working, notes };
 }
