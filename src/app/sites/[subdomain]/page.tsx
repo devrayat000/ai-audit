@@ -16,6 +16,7 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
   const site = await readPublishedSite(subdomain);
   if (!site) return {};
   return {
+    metadataBase: new URL(site.meta.canonical),
     title: site.meta.title,
     description: site.meta.description,
     alternates: { canonical: site.meta.canonical },
@@ -23,12 +24,15 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
       title: site.meta.title,
       description: site.meta.description,
       url: site.meta.canonical,
+      siteName: site.data.name,
+      type: "website",
       images: site.meta.ogImage ? [{ url: site.meta.ogImage }] : undefined,
     },
     twitter: {
       card: "summary_large_image",
       title: site.meta.title,
       description: site.meta.description,
+      images: site.meta.ogImage ? [site.meta.ogImage] : undefined,
     },
   };
 }

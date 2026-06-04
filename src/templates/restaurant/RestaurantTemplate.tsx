@@ -44,7 +44,11 @@ export function RestaurantTemplate({ site }: Props) {
   const menuSections = d.menu?.sections ?? [];
   const totalDishes = menuSections.reduce((a, s) => a + s.items.length, 0);
   const featured = pickFeatured(menuSections, gallery, 6);
-  const jsonLd = restaurantJsonLd(site);
+  const faqs =
+    site.geo?.faqs && site.geo.faqs.length > 0
+      ? site.geo.faqs
+      : fallbackFaqs(d);
+  const jsonLd = restaurantJsonLd(site, { faqs });
 
   const cityLine = [d.contact.city, d.contact.region]
     .filter(Boolean)
@@ -56,8 +60,7 @@ export function RestaurantTemplate({ site }: Props) {
   if (featured.length > 0) navLinks.push({ href: "#dishes", label: "Dishes" });
   if (menuSections.length > 0) navLinks.push({ href: "#menu", label: "Menu" });
   if (gallery.length > 1) navLinks.push({ href: "#gallery", label: "Gallery" });
-  if (site.geo?.faqs && site.geo.faqs.length > 0)
-    navLinks.push({ href: "#faq", label: "FAQ" });
+  if (faqs.length > 0) navLinks.push({ href: "#faq", label: "FAQ" });
   navLinks.push({ href: "#visit", label: "Visit" });
 
   const reservationCta =
@@ -201,14 +204,15 @@ export function RestaurantTemplate({ site }: Props) {
                   </h2>
                   <div className="section-divider mb-8" />
                   <div className="space-y-5 text-muted-foreground font-sans text-sm md:text-base leading-relaxed">
-                    {site.geo?.summary && <p>{site.geo.summary}</p>}
-                    {(site.geo?.about ?? d.about) && (
-                      <p>{site.geo?.about ?? d.about}</p>
-                    )}
-                    {!site.geo?.summary &&
-                      !site.geo?.about &&
-                      !d.about &&
-                      d.description && <p>{d.description}</p>}
+                    {splitParagraphs(
+                      site.geo?.summary ??
+                        site.geo?.about ??
+                        d.about ??
+                        d.description ??
+                        "",
+                    ).map((para, i) => (
+                      <p key={i}>{para}</p>
+                    ))}
                   </div>
 
                   {(d.highlights?.length ?? 0) > 0 && (
@@ -456,7 +460,7 @@ export function RestaurantTemplate({ site }: Props) {
         )}
 
         {/* FAQ */}
-        {site.geo?.faqs && site.geo.faqs.length > 0 && (
+        {faqs.length > 0 && (
           <section
             id="faq"
             className="py-14 md:py-24 bg-secondary/40 border-t border-border"
@@ -467,11 +471,11 @@ export function RestaurantTemplate({ site }: Props) {
                   Good to Know
                 </p>
                 <h2 className="font-serif text-4xl md:text-5xl font-light text-foreground text-balance">
-                  Frequently Asked
+                  Frequently Asked Questions
                 </h2>
               </div>
               <div className="space-y-3">
-                {site.geo.faqs.map((qa, i) => (
+                {faqs.map((qa, i) => (
                   <details
                     key={i}
                     className="group bg-card border border-border px-5 py-4 hover:border-gold/30 transition-colors [&_summary::-webkit-details-marker]:hidden"
@@ -1066,6 +1070,101 @@ function abbreviateHighlight(text: string): string {
   if (m) return m[1];
   const word = text.split(/\s+/)[0] ?? "";
   return word.slice(0, 5).toUpperCase();
+}
+
+function splitParagraphs(text: string): string[] {
+  if (!text) return [];
+  // First split on existing paragraph breaks.
+  const blocks = text
+    .split(/\n{2,}/)
+    .map((b) => b.trim())
+    .filter(Boolean);
+  const out: string[] = [];
+  for (const block of blocks) {
+    const words = block.split(/\s+/);
+    if (words.length <= 100) {
+      out.push(block);
+      continue;
+    }
+    // Split into ≤80-word chunks at sentence boundaries.
+    const sentences = block.match(/[^.!?]+[.!?]+\s*/g) ?? [block];
+    let buf: string[] = [];
+    let bufWords = 0;
+    for (const s of sentences) {
+      const w = s.trim().split(/\s+/).length;
+      if (bufWords + w > 80 && buf.length > 0) {
+        out.push(buf.join(" ").trim());
+        buf = [];
+        bufWords = 0;
+      }
+      buf.push(s.trim());
+      bufWords += w;
+    }
+    if (buf.length > 0) out.push(buf.join(" ").trim());
+  }
+  return out;
+}
+
+function fallbackFaqs(d: RestaurantData): { q: string; a: string }[] {
+  const out: { q: string; a: string }[] = [];
+  const cityLine = [d.contact.city, d.contact.region].filter(Boolean).join(", ");
+
+  out.push({
+    q: `Where is ${d.name} located?`,
+    a:
+      d.contact.street || cityLine
+        ? `${d.name} is located at ${[d.contact.street, cityLine, d.contact.country].filter(Boolean).join(", ")}.`
+        : `Visit ${d.name} — see the address and map directions in the Visit section.`,
+  });
+
+  if (d.hours && d.hours.length > 0) {
+    const days = d.hours
+      .filter((h) => !h.closed && h.opens && h.closes)
+      .map((h) => `${h.day} ${h.opens}–${h.closes}`)
+      .join(", ");
+    out.push({
+      q: `What are the opening hours at ${d.name}?`,
+      a: days
+        ? `Opening hours: ${days}.`
+        : `Opening hours vary — see the schedule on the Visit section of this page.`,
+    });
+  } else {
+    out.push({
+      q: `When is ${d.name} open?`,
+      a: `Opening hours are listed in the Visit section. Reservations recommended where available.`,
+    });
+  }
+
+  if (d.cuisine?.length) {
+    out.push({
+      q: `What kind of food does ${d.name} serve?`,
+      a: `${d.name} serves ${d.cuisine.join(", ")} cuisine${d.priceRange ? `. Price range: ${d.priceRange}` : ""}.`,
+    });
+  } else {
+    out.push({
+      q: `What is on the menu at ${d.name}?`,
+      a: `Browse the full menu in the Menu section above. Highlights include signature dishes prepared daily.`,
+    });
+  }
+
+  if (d.reservationUrl) {
+    out.push({
+      q: `How do I make a reservation at ${d.name}?`,
+      a: `Reservations can be made online. Use the Reserve button at the top of the page to book directly.`,
+    });
+  } else if (d.contact.phone) {
+    out.push({
+      q: `How do I contact ${d.name}?`,
+      a: `Call ${d.contact.phone}${d.contact.email ? ` or email ${d.contact.email}` : ""} to get in touch.`,
+    });
+  } else {
+    out.push({
+      q: `Is ${d.name} tourist friendly?`,
+      a: `Yes — ${d.name} welcomes international visitors with an English menu, clear directions, and accessible information.`,
+    });
+  }
+
+  return out.slice(0, 6);
 }
 
 function safeHost(url: string): string {
