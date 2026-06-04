@@ -48,6 +48,8 @@
   --color-danger-foreground: var(--danger-foreground);
   --color-ink: var(--ink);
   --color-paper: var(--paper);
+  --color-gold: var(--gold);
+  --color-stone: var(--stone);
   --color-accent-brand: var(--accent-brand);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
@@ -61,6 +63,8 @@
 :root {
   --paper: #faf8f4;
   --ink: #1a1a1a;
+  --gold: #c9a657;
+  --stone: #b8b1a4;
   --accent-brand: #c8102e;
 
   --background: #faf8f4;
@@ -106,6 +110,8 @@
 .dark {
   --paper: #14130f;
   --ink: #f3eee2;
+  --gold: #d4b876;
+  --stone: #6b6760;
   --accent-brand: #ff5a5a;
 
   --background: #14130f;
@@ -157,9 +163,43 @@
   }
   html {
     @apply font-sans;
+    scroll-behavior: smooth;
   }
   h1, h2, h3 {
     font-family: var(--font-serif), Georgia, "Times New Roman", serif;
     letter-spacing: -0.02em;
+  }
+}
+
+@layer utilities {
+  .text-gold { color: var(--gold); }
+  .bg-gold { background-color: var(--gold); }
+  .border-gold { border-color: var(--gold); }
+  .text-ink { color: var(--ink); }
+  .bg-paper { background-color: var(--paper); }
+
+  .hero-overlay {
+    background: linear-gradient(
+      to bottom,
+      rgb(0 0 0 / 0.30) 0%,
+      rgb(0 0 0 / 0.55) 60%,
+      rgb(0 0 0 / 0.78) 100%
+    );
+  }
+
+  .section-divider {
+    width: 3rem;
+    height: 1px;
+    background-color: var(--gold);
+    display: inline-block;
+  }
+
+  .fade-up {
+    animation: fadeUp 0.7s ease forwards;
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 }
