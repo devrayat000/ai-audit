@@ -31,6 +31,9 @@ const DAY_MAP: Record<string, OpeningHour["day"]> = {
   sun: "Sunday",
 };
 
+const PRICE_RE =
+  /(?:(?:¥|\$|€|£|₹|৳|RM|₩|฿|₫|₱|HK\$|S\$|NT\$|CHF|kr|zł|R\$)\s?\d[\d.,]*)|(?:\b\d[\d,]*\.\d{2}\b)|(?:\b\d[\d,]{2,}\s?(?:円|JPY|USD|EUR|GBP|INR|BDT|TWD|HKD|KRW|THB|VND|PHP|MYR|IDR|SGD)\b)/i;
+
 function uniq<T>(arr: T[], key: (v: T) => string): T[] {
   const seen = new Set<string>();
   const out: T[] = [];
@@ -84,7 +87,6 @@ function digJsonForType(node: unknown, typeMatch: RegExp, key: string): string |
 
 function extractAddress(blocks: unknown[], $: CheerioAPI): ContactInfo {
   const out: ContactInfo = {};
-  // schema first
   for (const block of blocks) {
     const a = digJsonForAddress(block);
     if (a) {
@@ -95,12 +97,10 @@ function extractAddress(blocks: unknown[], $: CheerioAPI): ContactInfo {
       out.country = out.country ?? a.addressCountry;
     }
   }
-  // DOM fallback
   if (!out.street) {
     const addrText = clean($("address").first().text());
     if (addrText) out.street = addrText;
   }
-  // Phone, email
   const phoneHref = $('a[href^="tel:"]').first().attr("href")?.replace(/^tel:/, "");
   if (phoneHref) out.phone = phoneHref.trim();
   const emailHref = $('a[href^="mailto:"]').first().attr("href")?.replace(/^mailto:/, "");
@@ -173,7 +173,6 @@ function extractSocial($: CheerioAPI): SocialLinks {
 
 function extractHours(blocks: unknown[], $: CheerioAPI, body: string): OpeningHour[] {
   const map = new Map<string, OpeningHour>();
-  // schema OpeningHoursSpecification
   function dig(node: unknown) {
     if (!node || typeof node !== "object") return;
     if (Array.isArray(node)) {
@@ -205,7 +204,6 @@ function extractHours(blocks: unknown[], $: CheerioAPI, body: string): OpeningHo
   }
   blocks.forEach(dig);
 
-  // text fallback — match patterns like "Mon-Fri 10:00 - 22:00"
   if (map.size === 0) {
     const re =
       /\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\s*(?:-|to|–)?\s*(?:(mon|tue|wed|thu|fri|sat|sun)[a-z]*)?\s*[: ]?\s*(\d{1,2}[:.h]\d{2})\s*(?:-|to|–|—)\s*(\d{1,2}[:.h]\d{2})/gi;
@@ -221,7 +219,6 @@ function extractHours(blocks: unknown[], $: CheerioAPI, body: string): OpeningHo
       }
     }
   }
-  // also rely on plain $ for span/dt patterns
   if (map.size === 0) {
     $("li, p, div, span, dt, dd").each((_, el) => {
       if (map.size >= 7) return;
@@ -267,7 +264,6 @@ function isPlaceholderUrl(url: string): boolean {
 }
 
 function pickFromSrcset(srcset: string): string | null {
-  // Pick the LARGEST candidate. Each entry: "URL width" or "URL density".
   const parts = srcset.split(",").map((p) => p.trim()).filter(Boolean);
   let best: { url: string; weight: number } | null = null;
   for (const part of parts) {
@@ -294,7 +290,6 @@ const LAZY_ATTRS = [
 ] as const;
 
 function pickImgUrl($el: Cheerio<Element>): string | null {
-  // Order of preference: srcset (largest) → lazy-load attrs → src.
   const srcset = ($el.attr("srcset") ?? "").trim();
   if (srcset) {
     const best = pickFromSrcset(srcset);
@@ -325,9 +320,13 @@ function pushAbsImage(
   if (isPlaceholderUrl(raw)) return;
   const abs = resolveUrl(pageUrl, raw);
   if (!abs || !/^https?:\/\//i.test(abs)) return;
-  const looksIcon =
-    /(?:^|\/)(?:favicon|sprite|emoji|spinner|loader)(?:[-_.]|$)|icon-?\d+x\d+/i.test(abs);
-  if (looksIcon) return;
+  // Drop chrome: favicons, sprites, social icons, qr codes, logos.
+  const looksChrome =
+    /(?:^|\/)(?:favicon|sprite|emoji|spinner|loader|qr[-_]?code|whatsapp|line|share)(?:[-_.]|$)/i.test(abs) ||
+    /icon-?\d+x\d+/i.test(abs) ||
+    /(?:^|\/)logos?(?:[-_./]|$)/i.test(abs) ||
+    /(?:^|\/)(?:social|avatar)(?:[-_./]|$)/i.test(abs);
+  if (looksChrome) return;
   refs.push({ url: abs, alt });
 }
 
@@ -338,13 +337,11 @@ function extractGalleryFromPages(pages: PageData[], rootUrl: string): ImageRef[]
     if (!html) continue;
     const $ = cheerio.load(html);
 
-    // og:image first — most reliable.
     const og = $('meta[property="og:image"]').attr("content")?.trim();
     if (og) pushAbsImage(refs, page.url, og);
     const twitter = $('meta[name="twitter:image"]').attr("content")?.trim();
     if (twitter) pushAbsImage(refs, page.url, twitter);
 
-    // <picture><source srcset> — preferred image when available.
     $("picture source[srcset]").each((_, el) => {
       const srcset = ($(el).attr("srcset") ?? "").trim();
       if (!srcset) return;
@@ -354,7 +351,6 @@ function extractGalleryFromPages(pages: PageData[], rootUrl: string): ImageRef[]
       pushAbsImage(refs, page.url, best, alt);
     });
 
-    // <img> with lazy/srcset awareness.
     $("img").each((_, el) => {
       const $el = $(el);
       const url = pickImgUrl($el);
@@ -363,7 +359,6 @@ function extractGalleryFromPages(pages: PageData[], rootUrl: string): ImageRef[]
       pushAbsImage(refs, page.url, url, alt);
     });
 
-    // CSS background-image on style attributes (hero images commonly).
     $("[style*='background']").each((_, el) => {
       const style = $(el).attr("style") ?? "";
       const m = style.match(/background(?:-image)?\s*:\s*url\((['"]?)([^'")]+)\1\)/i);
@@ -373,64 +368,438 @@ function extractGalleryFromPages(pages: PageData[], rootUrl: string): ImageRef[]
 
     void rootUrl;
   }
-  return uniq(refs, (r) => r.url).slice(0, 24);
+  return uniq(refs, (r) => r.url).slice(0, 36);
 }
 
 function pickHeroImage(gallery: ImageRef[]): ImageRef | undefined {
-  // gallery is already absolutized + og:image is gallery[0]. Pick hero-ish
-  // alt/url candidate, else fall back to first gallery image.
-  const candidate = gallery.find((g) =>
-    /(hero|banner|cover|kv|main|top|featured)/i.test(`${g.url} ${g.alt ?? ""}`),
-  );
-  return candidate ?? gallery[0];
+  // Prefer explicit hero-ish + interior/exterior shots over food.
+  const ranked = [...gallery].sort((a, b) => heroScore(b) - heroScore(a));
+  return ranked[0] ?? gallery[0];
+}
+
+function heroScore(img: ImageRef): number {
+  const hay = `${img.url} ${img.alt ?? ""}`.toLowerCase();
+  let s = 0;
+  if (/(hero|banner|cover|kv|main-?image|top-?image|featured)/i.test(hay)) s += 10;
+  if (/(interior|exterior|dining|restaurant|venue|storefront|facade|building)/i.test(hay)) s += 6;
+  if (/(dish|plate|menu-item|food|sushi|burger|pasta|cake|drink|wine)/i.test(hay)) s -= 2;
+  if (/(logo|favicon|sprite|icon|avatar|social|share)/i.test(hay)) s -= 1000;
+  return s;
+}
+
+// ───── Menu extraction ─────────────────────────────────────────────────────────
+
+const MENU_URL_HINT = /\/(?:menu|menus|cuisine|food|dishes|carte|carta|speisekarte|メニュー|menu-list)(?:\/|$|\?|#)/i;
+
+function findMenuPages(pages: PageData[]): PageData[] {
+  // Order menu pages first, but always try every page so single-page sites still work.
+  const menuish: PageData[] = [];
+  const rest: PageData[] = [];
+  for (const p of pages) {
+    if (MENU_URL_HINT.test(p.url)) menuish.push(p);
+    else rest.push(p);
+  }
+  return [...menuish, ...rest];
 }
 
 function extractMenu(pages: PageData[]): { sections: MenuSection[] } | undefined {
-  // look for a "menu"-pathed page
-  const menuPage =
-    pages.find((p) => /\/menu|cuisine|food|dishes/i.test(p.url)) ?? pages[0];
-  if (!menuPage) return undefined;
-  const html = menuPage.renderedHtml || menuPage.rawHtml;
-  const $ = cheerio.load(html);
-  const sections: MenuSection[] = [];
+  for (const page of findMenuPages(pages)) {
+    const html = page.renderedHtml || page.rawHtml;
+    if (!html) continue;
+    const $ = cheerio.load(html);
 
-  // pattern A: schema.org Menu / MenuSection / MenuItem
-  const blocks = parseSchemaFromHtml(html).raw;
-  const schemaSections = digMenuSections(blocks);
-  if (schemaSections.length > 0) {
-    return { sections: schemaSections };
+    // 1. JSON-LD Menu/MenuSection/MenuItem.
+    const blocks = parseSchemaFromHtml(html).raw;
+    const schemaSections = digMenuSections(blocks);
+    if (sectionsHaveItems(schemaSections, 3)) return { sections: schemaSections };
+
+    // 2. Structured CSS class blocks (.menu-section / .menu-category).
+    const classySections = extractMenuFromClassedBlocks($, page.url);
+    if (sectionsHaveItems(classySections, 3)) return { sections: classySections };
+
+    // 3. Heading-grouped lists.
+    const headingSections = extractMenuFromHeadings($, page.url);
+    if (sectionsHaveItems(headingSections, 3)) return { sections: headingSections };
+
+    // 4. Definition lists.
+    const dlSections = extractMenuFromDl($, page.url);
+    if (sectionsHaveItems(dlSections, 3)) return { sections: dlSections };
+
+    // 5. Tables of dishes.
+    const tableSections = extractMenuFromTables($, page.url);
+    if (sectionsHaveItems(tableSections, 3)) return { sections: tableSections };
+
+    // 6. Flat list — any element with a price string nearby.
+    const flatItems = extractFlatPricedItems($, page.url);
+    if (flatItems.length >= 3) {
+      return { sections: [{ title: "Menu", items: flatItems }] };
+    }
+  }
+  return undefined;
+}
+
+function sectionsHaveItems(sections: MenuSection[], minTotal: number): boolean {
+  const total = sections.reduce((a, s) => a + s.items.length, 0);
+  return total >= minTotal;
+}
+
+const SECTION_BLOCK_SELECTORS = [
+  "[class*='menu-section']",
+  "[class*='menu-category']",
+  "[class*='menu_section']",
+  "[class*='menu_category']",
+  "[class*='food-category']",
+  "[id*='menu-section']",
+  "[id*='menu-category']",
+] as const;
+
+const ITEM_BLOCK_SELECTORS = [
+  ".menu-item",
+  ".menu_item",
+  ".food-item",
+  ".dish",
+  ".dish-item",
+  ".product",
+  "[class*='menu-item']",
+  "[class*='menuItem']",
+  "[class*='food-item']",
+  "[class*='dish-item']",
+  "[class*='-dish']",
+  "li.product",
+  "li.dish",
+] as const;
+
+function extractMenuFromClassedBlocks(
+  $: CheerioAPI,
+  pageUrl: string,
+): MenuSection[] {
+  const sections: MenuSection[] = [];
+  $(SECTION_BLOCK_SELECTORS.join(",")).each((_, sec) => {
+    const $sec = $(sec as Element);
+    const title =
+      clean($sec.find("h1, h2, h3, h4, .menu-section-title, [class*='title']").first().text()) ??
+      clean($sec.attr("data-title")) ??
+      "Menu";
+    const items = extractItemsFromContainer($sec, $, pageUrl);
+    if (items.length >= 2) sections.push({ title, items });
+  });
+  return mergeDuplicateSections(sections);
+}
+
+function extractItemsFromContainer(
+  $container: Cheerio<Element>,
+  $: CheerioAPI,
+  pageUrl: string,
+): MenuItem[] {
+  const items: MenuItem[] = [];
+
+  $container.find(ITEM_BLOCK_SELECTORS.join(",")).each((_, el) => {
+    const $el = $(el);
+    const item = parseItemElement($el, $, pageUrl);
+    if (item) items.push(item);
+  });
+
+  if (items.length === 0) {
+    // fall back to any li inside the container with a price string
+    $container.find("li").each((_, el) => {
+      const $el = $(el);
+      const item = parseItemElement($el, $, pageUrl);
+      if (item) items.push(item);
+    });
   }
 
-  // pattern B: heading-grouped lists. For each heading, find sibling items.
-  const headingSel = "h2, h3";
-  $(headingSel).each((_, h) => {
+  return uniqByName(items);
+}
+
+function parseItemElement(
+  $el: Cheerio<Element>,
+  $: CheerioAPI,
+  pageUrl: string,
+): MenuItem | null {
+  // Name lookup: dedicated child classes first.
+  const nameSelectors = [
+    "[class*='menu-item-title']",
+    "[class*='menu-item-name']",
+    "[class*='item-title']",
+    "[class*='item-name']",
+    "[class*='dish-name']",
+    "[class*='dish-title']",
+    "[class*='product-title']",
+    "[class*='product-name']",
+    "h1, h2, h3, h4, h5, .title, .name",
+  ];
+  let name: string | undefined;
+  for (const sel of nameSelectors) {
+    const t = clean($el.find(sel).first().text());
+    if (t) {
+      name = t;
+      break;
+    }
+  }
+
+  // Price lookup.
+  const priceSelectors = [
+    "[class*='price']",
+    "[class*='amount']",
+    "[class*='cost']",
+    ".menu-item-price",
+  ];
+  let priceText: string | undefined;
+  for (const sel of priceSelectors) {
+    const t = clean($el.find(sel).first().text());
+    if (t && PRICE_RE.test(t)) {
+      const m = t.match(PRICE_RE);
+      if (m) {
+        priceText = m[0];
+        break;
+      }
+    }
+  }
+
+  // Description.
+  const descSelectors = [
+    "[class*='description']",
+    "[class*='desc']",
+    "[class*='detail']",
+    "[class*='summary']",
+    ".menu-item-description",
+    "p",
+  ];
+  let description: string | undefined;
+  for (const sel of descSelectors) {
+    const $d = $el.find(sel).first();
+    if (!$d.length) continue;
+    if (name && clean($d.text()) === name) continue;
+    const t = clean($d.text());
+    if (t && t.length > 5 && (!priceText || !t.startsWith(priceText))) {
+      description = t.slice(0, 400);
+      break;
+    }
+  }
+
+  // Fallback: parse the full text of the element.
+  if (!name || !priceText) {
+    const raw = clean($el.text());
+    if (!raw) return null;
+    const m = raw.match(PRICE_RE);
+    if (m && !priceText) priceText = m[0];
+    if (!name) {
+      const candidate = raw
+        .replace(priceText ?? "", "")
+        .split(/[\n\.]/)[0]
+        .trim();
+      if (candidate.length >= 2 && candidate.length <= 100) name = candidate;
+    }
+  }
+
+  if (!name || name.length < 2) return null;
+  if (name.length > 120) return null;
+
+  // Image.
+  let image: ImageRef | undefined;
+  const $img = $el.find("img").first();
+  if ($img.length) {
+    const url = pickImgUrl($img);
+    if (url) {
+      const abs = resolveUrl(pageUrl, url);
+      if (abs && /^https?:\/\//i.test(abs) && !isPlaceholderUrl(abs)) {
+        image = { url: abs, alt: clean($img.attr("alt")) };
+      }
+    }
+  }
+
+  return {
+    name,
+    description,
+    price: priceText,
+    image,
+  };
+}
+
+const HEADING_KEYWORDS =
+  /(menu|appetiz|starter|entrée|entree|main|dessert|drink|beverage|wine|cocktail|special|salad|soup|side|small[-\s]?plate|share|tapas|sushi|sashimi|grill|noodle|pizza|pasta|burger|breakfast|brunch|lunch|dinner|coffee|tea|wagyu|cuisine|sets?|combo|signature|chef|seasonal|kid|vegetarian|vegan|halal)/i;
+
+function extractMenuFromHeadings(
+  $: CheerioAPI,
+  pageUrl: string,
+): MenuSection[] {
+  const sections: MenuSection[] = [];
+  const headings = $("h2, h3, h4").toArray();
+  for (const h of headings) {
     const $h = $(h);
     const title = clean($h.text());
-    if (!title) return;
-    if (!/menu|appetiz|starter|entrée|main|dessert|drink|beverage|wine|special/i.test(title) && sections.length === 0) {
-      // first heading: still try to capture if items look like menu items underneath
-    }
-    const items = collectMenuItemsAfter($, $h.get(0) as Element, menuPage.url);
+    if (!title) continue;
+    if (title.length > 80) continue;
+    const items = collectMenuItemsAfter($, h, pageUrl);
     if (items.length >= 2) {
       sections.push({ title, items });
     }
-  });
-
-  if (sections.length === 0) {
-    // pattern C: any list of "name … price"
-    const items: MenuItem[] = [];
-    $("li, .menu-item, [class*='menu']").each((_, el) => {
-      const text = clean($(el).text());
-      if (!text) return;
-      const priceMatch = text.match(/(?:¥|\$|€|£|₹|৳)\s?\d[\d,.]*|\b\d[\d,]*\s?(?:円|JPY|USD|EUR|GBP)\b/);
-      if (!priceMatch) return;
-      const name = text.replace(priceMatch[0], "").trim().slice(0, 80);
-      if (name.length < 2) return;
-      items.push({ name, price: priceMatch[0] });
-    });
-    if (items.length >= 3) sections.push({ title: "Menu", items: uniqByName(items) });
   }
-  return sections.length > 0 ? { sections } : undefined;
+  // If many sections matched, prefer ones with keyword titles; otherwise keep all.
+  if (sections.length > 12) {
+    const keyworded = sections.filter((s) => HEADING_KEYWORDS.test(s.title));
+    if (keyworded.length >= 3) return keyworded.slice(0, 20);
+  }
+  return mergeDuplicateSections(sections).slice(0, 20);
+}
+
+function collectMenuItemsAfter(
+  $: CheerioAPI,
+  heading: Element,
+  pageUrl: string,
+): MenuItem[] {
+  const items: MenuItem[] = [];
+  // Walk forward through siblings until we hit a stronger/equal heading.
+  const stopAt = (heading.tagName || "").toLowerCase();
+  const stopTags = stopAt === "h2"
+    ? ["h1", "h2"]
+    : stopAt === "h3"
+      ? ["h1", "h2", "h3"]
+      : ["h1", "h2", "h3", "h4"];
+  let cur: Element | null = (heading as { next?: Element | null }).next ?? null;
+  while (cur) {
+    if (cur.type === "tag") {
+      const tag = cur.tagName?.toLowerCase();
+      if (tag && stopTags.includes(tag)) break;
+      const $cur = $(cur);
+      // 1. Try item-block selectors inside this sibling.
+      $cur.find(ITEM_BLOCK_SELECTORS.join(",")).each((_, el) => {
+        const item = parseItemElement($(el), $, pageUrl);
+        if (item) items.push(item);
+      });
+      // 2. Try li within the sibling.
+      if (items.length === 0) {
+        $cur.find("li").each((_, li) => {
+          const item = parseItemElement($(li), $, pageUrl);
+          if (item) items.push(item);
+        });
+      }
+      // 3. The sibling itself may be a single item card.
+      if (items.length === 0) {
+        const direct = parseItemElement($cur, $, pageUrl);
+        if (direct) items.push(direct);
+      }
+    }
+    cur = (cur as { next?: Element | null }).next ?? null;
+  }
+  return uniqByName(items).slice(0, 40);
+}
+
+function extractMenuFromDl($: CheerioAPI, pageUrl: string): MenuSection[] {
+  const sections: MenuSection[] = [];
+  $("dl").each((_, dl) => {
+    const $dl = $(dl);
+    const heading = clean($dl.prev("h1, h2, h3, h4").text()) ?? "Menu";
+    const items: MenuItem[] = [];
+    const children = $dl.children().toArray();
+    for (let i = 0; i < children.length; i++) {
+      const el = children[i];
+      const tag = (el as { tagName?: string }).tagName?.toLowerCase();
+      if (tag !== "dt") continue;
+      const $dt = $(el);
+      const nameText = clean($dt.text());
+      if (!nameText) continue;
+      const nameMatch = nameText.match(PRICE_RE);
+      const name = (nameMatch ? nameText.replace(nameMatch[0], "") : nameText)
+        .trim()
+        .slice(0, 120);
+      if (name.length < 2) continue;
+      const priceFromName = nameMatch?.[0];
+      let description: string | undefined;
+      let priceText: string | undefined = priceFromName;
+      // Scan following dd siblings.
+      for (let j = i + 1; j < children.length; j++) {
+        const nx = children[j];
+        const nxTag = (nx as { tagName?: string }).tagName?.toLowerCase();
+        if (nxTag !== "dd") break;
+        const ddText = clean($(nx).text());
+        if (!ddText) continue;
+        const m = ddText.match(PRICE_RE);
+        if (m && !priceText) priceText = m[0];
+        const desc = (m ? ddText.replace(m[0], "") : ddText).trim();
+        if (desc.length > 5 && !description) description = desc.slice(0, 400);
+        i = j;
+      }
+      items.push({ name, description, price: priceText, image: undefined });
+      void pageUrl;
+    }
+    if (items.length >= 2) sections.push({ title: heading, items: uniqByName(items) });
+  });
+  return sections;
+}
+
+function extractMenuFromTables($: CheerioAPI, pageUrl: string): MenuSection[] {
+  const sections: MenuSection[] = [];
+  $("table").each((_, table) => {
+    const $table = $(table);
+    const heading =
+      clean($table.find("caption").first().text()) ??
+      clean($table.prev("h1, h2, h3, h4").text()) ??
+      "Menu";
+    const items: MenuItem[] = [];
+    $table.find("tr").each((_, tr) => {
+      const $tr = $(tr);
+      const cells = $tr.find("td").toArray().map((c) => clean($(c).text()) ?? "");
+      if (cells.length < 2) return;
+      // Find the price cell (any cell matching PRICE_RE); name = longest non-price cell.
+      const priceCellIdx = cells.findIndex((c) => PRICE_RE.test(c));
+      if (priceCellIdx < 0) return;
+      const priceMatch = cells[priceCellIdx].match(PRICE_RE);
+      const nameCandidates = cells.filter((_, i) => i !== priceCellIdx);
+      const name = nameCandidates
+        .filter((c) => c && c.length >= 2 && c.length <= 100)
+        .sort((a, b) => b.length - a.length)[0];
+      if (!name) return;
+      const description = nameCandidates
+        .filter((c) => c !== name && c.length > 8)
+        .join(" — ")
+        .slice(0, 400);
+      items.push({
+        name,
+        description: description || undefined,
+        price: priceMatch?.[0],
+        image: undefined,
+      });
+      void pageUrl;
+    });
+    if (items.length >= 3) sections.push({ title: heading, items: uniqByName(items) });
+  });
+  return sections;
+}
+
+function extractFlatPricedItems($: CheerioAPI, pageUrl: string): MenuItem[] {
+  const items: MenuItem[] = [];
+  $("li, p, article, .menu-item, [class*='menu']").each((_, el) => {
+    const $el = $(el);
+    if ($el.children("li, article").length > 0) return;
+    const text = clean($el.text());
+    if (!text || text.length > 400) return;
+    const m = text.match(PRICE_RE);
+    if (!m) return;
+    const name = text
+      .replace(m[0], "")
+      .split("\n")[0]
+      .trim()
+      .slice(0, 100);
+    if (name.length < 2) return;
+    items.push({ name, price: m[0] });
+    void pageUrl;
+  });
+  return uniqByName(items).slice(0, 40);
+}
+
+function mergeDuplicateSections(sections: MenuSection[]): MenuSection[] {
+  const byTitle = new Map<string, MenuSection>();
+  for (const s of sections) {
+    const key = s.title.toLowerCase();
+    const existing = byTitle.get(key);
+    if (existing) {
+      existing.items = uniqByName([...existing.items, ...s.items]);
+    } else {
+      byTitle.set(key, { ...s });
+    }
+  }
+  return Array.from(byTitle.values());
 }
 
 function digMenuSections(blocks: unknown[]): MenuSection[] {
@@ -486,34 +855,11 @@ function collectMenuItemsFromSchema(raw: unknown): MenuItem[] {
     }
     let image: ImageRef | undefined;
     if (typeof o.image === "string") image = { url: o.image };
+    else if (Array.isArray(o.image) && typeof o.image[0] === "string")
+      image = { url: o.image[0] };
     items.push({ name, description: desc, price, image });
   }
   return items;
-}
-
-function collectMenuItemsAfter($: CheerioAPI, heading: Element, pageUrl: string): MenuItem[] {
-  const items: MenuItem[] = [];
-  let cur: Element | null = heading.next as Element | null;
-  while (cur) {
-    if (cur.type === "tag") {
-      const tag = cur.tagName?.toLowerCase();
-      if (tag === "h1" || tag === "h2" || tag === "h3") break;
-      const $cur = $(cur);
-      // li with possible price
-      $cur.find("li, .menu-item, [class*='item']").each((_, li) => {
-        const text = clean($(li).text());
-        if (!text) return;
-        const priceMatch = text.match(/(?:¥|\$|€|£|₹|৳)\s?\d[\d,.]*|\b\d[\d,]*\s?(?:円|JPY|USD|EUR|GBP)\b/);
-        const name = (priceMatch ? text.replace(priceMatch[0], "") : text).trim().split("\n")[0].slice(0, 80);
-        if (name.length < 2) return;
-        const img = $(li).find("img").first().attr("src");
-        const imgRef: ImageRef | undefined = img ? { url: resolveUrl(pageUrl, img) ?? img } : undefined;
-        items.push({ name, price: priceMatch?.[0], image: imgRef });
-      });
-    }
-    cur = (cur as { next?: Element | null }).next ?? null;
-  }
-  return uniqByName(items).slice(0, 30);
 }
 
 function uniqByName(items: MenuItem[]): MenuItem[] {

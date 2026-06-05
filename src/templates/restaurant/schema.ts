@@ -10,13 +10,9 @@ const DAYS = [
   "Sunday",
 ] as const;
 
-export function restaurantJsonLd(
-  site: PublishedSite,
-  opts: { faqs?: { q: string; a: string }[] } = {},
-): object[] {
+export function restaurantJsonLd(site: PublishedSite): object[] {
   const d = site.data as RestaurantData;
   const out: object[] = [];
-  const faqs = opts.faqs ?? site.geo?.faqs ?? [];
 
   const address = buildAddress(d);
   const hours = buildHoursSpec(d);
@@ -36,7 +32,7 @@ export function restaurantJsonLd(
     address,
     openingHoursSpecification: hours,
     acceptsReservations: !!d.reservationUrl,
-    menu: d.menu ? `${site.meta.canonical}#menu` : undefined,
+    menu: d.menu ? `${site.meta.canonical}/menu` : undefined,
     sameAs: Object.values(d.social).filter(Boolean),
   });
 
@@ -56,6 +52,7 @@ export function restaurantJsonLd(
       "@context": "https://schema.org",
       "@type": "Menu",
       name: `${d.name} Menu`,
+      url: `${site.meta.canonical}/menu`,
       hasMenuSection: d.menu.sections.map((s) => ({
         "@type": "MenuSection",
         name: s.title,
@@ -75,44 +72,33 @@ export function restaurantJsonLd(
     });
   }
 
-  if (faqs.length > 0) {
-    out.push({
-      "@context": "https://schema.org",
-      "@type": "FAQPage",
-      mainEntity: faqs.map((qa) => ({
-        "@type": "Question",
-        name: qa.q,
-        acceptedAnswer: { "@type": "Answer", text: qa.a },
-      })),
+  // BreadcrumbList — helps content-structure + +1 in schema-markup.
+  const crumbs: object[] = [
+    {
+      "@type": "ListItem",
+      position: 1,
+      name: "Home",
+      item: site.meta.canonical,
+    },
+  ];
+  if (d.menu) {
+    crumbs.push({
+      "@type": "ListItem",
+      position: crumbs.length + 1,
+      name: "Menu",
+      item: `${site.meta.canonical}/menu`,
     });
   }
-
-  // BreadcrumbList — helps content-structure + +1 in schema-markup.
+  crumbs.push({
+    "@type": "ListItem",
+    position: crumbs.length + 1,
+    name: "Reservations",
+    item: `${site.meta.canonical}/reservation`,
+  });
   out.push({
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
-    itemListElement: [
-      {
-        "@type": "ListItem",
-        position: 1,
-        name: "Home",
-        item: site.meta.canonical,
-      },
-      d.menu
-        ? {
-            "@type": "ListItem",
-            position: 2,
-            name: "Menu",
-            item: `${site.meta.canonical}#menu`,
-          }
-        : null,
-      {
-        "@type": "ListItem",
-        position: d.menu ? 3 : 2,
-        name: "Visit",
-        item: `${site.meta.canonical}#visit`,
-      },
-    ].filter(Boolean),
+    itemListElement: crumbs,
   });
 
   // WebSite — covers the "general" required type fallback too.
@@ -137,8 +123,8 @@ function buildAddress(d: RestaurantData): Record<string, string> {
   if (d.contact.region) addr.addressRegion = d.contact.region;
   if (d.contact.postalCode) addr.postalCode = d.contact.postalCode;
   if (d.contact.country) addr.addressCountry = d.contact.country;
-  // Always include locality/region with placeholder if none, so the
-  // @type tag is still emitted with a body.
+  // Always include locality with placeholder if none, so the @type tag is
+  // still emitted with a body.
   if (!addr.addressLocality && !addr.addressCountry) {
     addr.addressLocality = "—";
   }
