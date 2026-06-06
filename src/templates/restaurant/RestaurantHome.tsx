@@ -1,21 +1,26 @@
 import type { PublishedSite, RestaurantData } from "@/lib/sites/types";
 import {
+  Accessibility,
   Baby,
   BookOpen,
   Clock,
   CreditCard,
   DoorOpen,
   Flame,
+  Languages,
   Leaf,
   Mail,
   MapPin,
   Navigation,
   Phone,
+  Shirt,
   Sparkles,
   Star,
+  Train,
   Utensils,
   Wifi,
 } from "lucide-react";
+import type { GeoEnrichment, WebFacts } from "@/lib/sites/types";
 import { restaurantJsonLd } from "./schema";
 import { proxied } from "./image";
 import { RestaurantNav } from "./RestaurantNav";
@@ -54,10 +59,11 @@ export function RestaurantHome({ site }: Props) {
   );
   const aboutImage = interiors[0] ?? d.gallery[0];
   const menuSections = d.menu?.sections ?? [];
-  const featured = pickFeatured(menuSections, interiors, 6);
+  const featured = pickFeatured(menuSections, interiors, 6, site.geo?.signatureDishes);
   const jsonLd = restaurantJsonLd(site);
   const navLinks = buildNavLinks(site);
   const reservationCta = buildReservationCta(site);
+  const atmosphereTags = site.geo?.atmosphereTags ?? [];
 
   const cityLine = [d.contact.city, d.contact.region]
     .filter(Boolean)
@@ -150,6 +156,9 @@ export function RestaurantHome({ site }: Props) {
               {d.reservationUrl && (
                 <HeroBadge icon={Clock} text="Reservations" />
               )}
+              {atmosphereTags.slice(0, 3).map((tag) => (
+                <HeroBadge key={tag} icon={Flame} text={tag} />
+              ))}
             </div>
           </div>
 
@@ -472,7 +481,7 @@ export function RestaurantHome({ site }: Props) {
         </section>
 
         {/* Quick info */}
-        <QuickInfoSection data={d} />
+        <QuickInfoSection data={d} webFacts={site.geo?.webFacts} />
 
         {/* Hours table */}
         {d.hours && d.hours.length > 0 && (
@@ -541,6 +550,7 @@ function pickFeatured(
   sections: { title: string; items: { name: string; description?: string; price?: string; image?: { url: string } }[] }[],
   gallery: { url: string }[],
   limit: number,
+  signatureDishes?: GeoEnrichment["signatureDishes"],
 ): FeaturedDish[] {
   const withDetails: FeaturedDish[] = [];
   const fallback: FeaturedDish[] = [];
@@ -559,7 +569,20 @@ function pickFeatured(
     }
   }
 
-  const picks = [...withDetails, ...fallback].slice(0, limit);
+  // Fold web-discovered signature dishes — prepend ones not already present in
+  // the scraped menu, so they appear even when the scraped menu is empty.
+  const scrapedNames = new Set(
+    [...withDetails, ...fallback].map((d) => d.name.toLowerCase()),
+  );
+  const webSignatures: FeaturedDish[] = (signatureDishes ?? [])
+    .filter((sd) => !scrapedNames.has(sd.name.toLowerCase()))
+    .map((sd) => ({
+      name: sd.name,
+      description: sd.description,
+      sectionTitle: sd.why,
+    }));
+
+  const picks = [...webSignatures, ...withDetails, ...fallback].slice(0, limit);
   return picks.map((p, i) => ({
     ...p,
     imageUrl: p.imageUrl ?? gallery[i % Math.max(gallery.length, 1)]?.url,
@@ -603,15 +626,23 @@ function InfoRow({
   );
 }
 
-function QuickInfoSection({ data }: { data: RestaurantData }) {
-  const items: {
+function QuickInfoSection({
+  data,
+  webFacts,
+}: {
+  data: RestaurantData;
+  webFacts?: WebFacts;
+}) {
+  type Item = {
     Icon: React.ComponentType<{ size?: number; className?: string }>;
     label: string;
     value: string;
     sub: string;
     iconBg: string;
     iconColor: string;
-  }[] = [];
+  };
+  const items: Item[] = [];
+  const wf = webFacts ?? {};
 
   const hoursSummary = nextOpenSummary(data);
   if (hoursSummary) {
@@ -619,18 +650,19 @@ function QuickInfoSection({ data }: { data: RestaurantData }) {
       Icon: Clock,
       label: "Hours",
       value: hoursSummary,
-      sub: data.reservationUrl ? "Reservations recommended" : "Walk-ins welcome",
+      sub: wf.bestTimeToVisit ?? (data.reservationUrl ? "Reservations recommended" : "Walk-ins welcome"),
       iconBg: "bg-amber-50",
       iconColor: "text-amber-500",
     });
   }
 
-  if (data.priceRange) {
+  const priceValue = wf.averageCost ?? data.priceRange;
+  if (priceValue) {
     items.push({
       Icon: CreditCard,
       label: "Price",
-      value: data.priceRange,
-      sub: "Cards accepted",
+      value: priceValue,
+      sub: wf.paymentMethods?.slice(0, 3).join(" · ") ?? "Cards accepted",
       iconBg: "bg-emerald-50",
       iconColor: "text-emerald-500",
     });
@@ -647,49 +679,83 @@ function QuickInfoSection({ data }: { data: RestaurantData }) {
     });
   }
 
-  if (data.reservationUrl) {
+  if (wf.transit) {
     items.push({
-      Icon: BookOpen,
-      label: "Reservations",
-      value: "Online Booking",
-      sub: "Book ahead of visit",
-      iconBg: "bg-violet-50",
-      iconColor: "text-violet-500",
-    });
-  }
-
-  if (data.orderUrl) {
-    items.push({
-      Icon: DoorOpen,
-      label: "Takeaway",
-      value: "Order Online",
-      sub: "Delivery available",
+      Icon: Train,
+      label: "Transit",
+      value: firstSentence(wf.transit, 40),
+      sub: wf.transit,
       iconBg: "bg-sky-50",
       iconColor: "text-sky-500",
     });
   }
 
-  if ((data.highlights?.length ?? 0) > 0) {
+  if (wf.languagesSpoken?.length) {
     items.push({
-      Icon: Leaf,
-      label: "Highlights",
-      value: data.highlights![0],
-      sub: data.highlights![1] ?? "Crafted with care",
+      Icon: Languages,
+      label: "Languages",
+      value: wf.languagesSpoken.slice(0, 2).join(", "),
+      sub:
+        wf.languagesSpoken.length > 2
+          ? `+${wf.languagesSpoken.length - 2} more`
+          : "Spoken by staff",
+      iconBg: "bg-indigo-50",
+      iconColor: "text-indigo-500",
+    });
+  } else {
+    items.push({
+      Icon: Wifi,
+      label: "English Menu",
+      value: "Available",
+      sub: "Tourist-friendly",
+      iconBg: "bg-indigo-50",
+      iconColor: "text-indigo-500",
+    });
+  }
+
+  if (wf.dressCode) {
+    items.push({
+      Icon: Shirt,
+      label: "Dress Code",
+      value: wf.dressCode,
+      sub: "Plan ahead",
+      iconBg: "bg-stone-50",
+      iconColor: "text-stone-500",
+    });
+  }
+
+  if (wf.accessibility) {
+    items.push({
+      Icon: Accessibility,
+      label: "Accessibility",
+      value: firstSentence(wf.accessibility, 40),
+      sub: wf.accessibility,
       iconBg: "bg-teal-50",
       iconColor: "text-teal-500",
     });
   }
 
-  items.push({
-    Icon: Wifi,
-    label: "English Menu",
-    value: "Available",
-    sub: "Tourist-friendly",
-    iconBg: "bg-indigo-50",
-    iconColor: "text-indigo-500",
-  });
+  if (wf.dietaryOptions?.length) {
+    items.push({
+      Icon: Leaf,
+      label: "Dietary",
+      value: wf.dietaryOptions[0],
+      sub: wf.dietaryOptions.slice(1).join(" · ") || "Options available",
+      iconBg: "bg-emerald-50",
+      iconColor: "text-emerald-600",
+    });
+  }
 
-  if (data.contact.country) {
+  if (wf.familyFriendly) {
+    items.push({
+      Icon: Baby,
+      label: "Family",
+      value: firstSentence(wf.familyFriendly, 40),
+      sub: wf.familyFriendly,
+      iconBg: "bg-orange-50",
+      iconColor: "text-orange-400",
+    });
+  } else if (data.contact.country) {
     items.push({
       Icon: Baby,
       label: "Family",
@@ -697,6 +763,28 @@ function QuickInfoSection({ data }: { data: RestaurantData }) {
       sub: "Children's portions",
       iconBg: "bg-orange-50",
       iconColor: "text-orange-400",
+    });
+  }
+
+  if (data.reservationUrl || wf.reservationPolicy) {
+    items.push({
+      Icon: BookOpen,
+      label: "Reservations",
+      value: data.reservationUrl ? "Online Booking" : "Required",
+      sub: wf.reservationPolicy ?? "Book ahead of visit",
+      iconBg: "bg-violet-50",
+      iconColor: "text-violet-500",
+    });
+  }
+
+  if (data.orderUrl || wf.takeaway || wf.delivery) {
+    items.push({
+      Icon: DoorOpen,
+      label: "Takeaway",
+      value: wf.takeaway ?? (data.orderUrl ? "Order Online" : "Available"),
+      sub: wf.delivery ?? "Pickup available",
+      iconBg: "bg-sky-50",
+      iconColor: "text-sky-600",
     });
   }
 
@@ -749,4 +837,10 @@ function abbreviateHighlight(text: string): string {
   if (m) return m[1];
   const word = text.split(/\s+/)[0] ?? "";
   return word.slice(0, 5).toUpperCase();
+}
+
+function firstSentence(text: string, max: number): string {
+  const piece = text.split(/[.;,—]/)[0]?.trim() ?? text;
+  if (piece.length <= max) return piece;
+  return piece.slice(0, max - 1).trimEnd() + "…";
 }

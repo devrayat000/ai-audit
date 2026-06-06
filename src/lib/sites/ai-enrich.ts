@@ -6,6 +6,9 @@ import type {
   PublishedSite,
   RatingSummary,
   RestaurantData,
+  SignatureDish,
+  SocialLinks,
+  WebFacts,
 } from "./types";
 import { parseJsonLenient } from "./json-extract";
 
@@ -86,28 +89,46 @@ function buildPrompt(site: PublishedSite, findings: CheckResult[]): string {
         .join(", ")
     : "";
 
-  const searchHints = isRestaurant
-    ? [
-        "",
-        "USE web_search to find:",
-        `- Recent guest reviews of "${d.name}"${cityLine ? ` in ${cityLine}` : ""}`,
-        `- Aggregate ratings on Google Maps, TripAdvisor, Tabelog, Yelp, OpenTable, or local platforms`,
-        `- Signature dishes, awards, press coverage, accolades`,
-        `- Any practical info missing from the scrape (transit access, dress code, kid-friendliness, payment methods)`,
-        "",
-        "Search queries to try (pick whichever fits the locale):",
-        `  - "${d.name}" ${cityLine || ""} reviews`,
-        `  - "${d.name}" ${cityLine || ""} TripAdvisor OR Google`,
-        `  - "${d.name}" ${cityLine || ""} signature dish`,
-        `  - "${d.name}" award OR michelin OR best`,
-        "",
-        "Reviews MUST be quoted from real search results — never invent them. If you cannot find at least 2 real reviews, return an empty reviews array.",
-      ].join("\n")
-    : [
-        "",
-        "USE web_search to find recent press, customer reviews, awards, and missing practical info about the business.",
-        "Reviews MUST be quoted from real search results — never invent.",
-      ].join("\n");
+  const restaurantHints = [
+    "",
+    "USE web_search aggressively (up to 5 searches) to find EVERYTHING publicly known about this restaurant. The goal is to enrich the site so it can be discovered, cited, and trusted by AI search engines.",
+    "",
+    `Search across Google Maps, TripAdvisor, Tabelog, Yelp, OpenTable, MICHELIN Guide, The World's 50 Best, Asia's 50 Best, local press, and news outlets.`,
+    "",
+    "Suggested search queries (pick whichever fit; mix English + local language hints from the address):",
+    `  - "${d.name}" ${cityLine || ""} reviews OR rating`,
+    `  - "${d.name}" ${cityLine || ""} TripAdvisor`,
+    `  - "${d.name}" ${cityLine || ""} signature dish OR best dish`,
+    `  - "${d.name}" Michelin OR award OR "50 best"`,
+    `  - "${d.name}" ${cityLine || ""} hours OR reservation OR menu`,
+    `  - "${d.name}" history OR founder OR opened`,
+    "",
+    "Collect, where available:",
+    "  - **Reviews** — real quotes from real platforms (Google, TripAdvisor, Tabelog, Yelp). NEVER invent.",
+    "  - **Rating summary** — aggregate score + total review count + platforms.",
+    "  - **Signature dishes** — what guests/press most often praise. Include short factual descriptions. Especially valuable when the scraped menu is empty or thin.",
+    "  - **Practical web facts** — transit (nearest station + walk minutes), parking, payment methods, languages spoken by staff, dress code, accessibility (step-free? wheelchair? braille?), family/kid policy, pet policy, takeaway, delivery, reservation policy, dietary options (vegetarian/vegan/halal/gluten-free), best time to visit, Wi-Fi, average meal cost per person.",
+    "  - **Atmosphere tags** — short adjectives describing the vibe (intimate, romantic, lively, formal, casual, family-friendly, date-night, business-lunch).",
+    "  - **Discovered cuisine** — if the scrape didn't already capture it.",
+    "  - **Discovered price range** — `$`, `$$`, `$$$`, `$$$$` if scrape missed it.",
+    "  - **Discovered social handles** — Instagram, Facebook, X, YouTube, TikTok, LINE — only if missing from the scrape.",
+    "",
+    "Hard rules for these fields:",
+    "  - Reviews MUST be real quotes you found. Never fabricate. If you cannot find usable reviews, return an empty reviews array.",
+    "  - Signature dishes can include items not on the scraped menu IF they're consistently cited in reviews/press. Mark `why` with a citation cue (e.g. 'frequently cited on Google reviews', 'New York Times feature dish').",
+    "  - Practical web facts must be sourced — only include what you actually found.",
+    "  - For `discoveredSocial`, only fill keys that the scrape did NOT already capture.",
+  ].join("\n");
+
+  const generalHints = [
+    "",
+    "USE web_search to find:",
+    "  - Recent press, customer reviews, awards.",
+    "  - Practical info missing from the scrape (transit, payment methods, accessibility, languages).",
+    "  - Discovered social handles, cuisine, price range.",
+    "",
+    "Reviews and press mentions MUST be real quotes. Never fabricate.",
+  ].join("\n");
 
   return [
     "Scraped site data:",
@@ -119,7 +140,7 @@ function buildPrompt(site: PublishedSite, findings: CheckResult[]): string {
     "```json",
     JSON.stringify(auditSummary, null, 2),
     "```",
-    searchHints,
+    isRestaurant ? restaurantHints : generalHints,
   ].join("\n");
 }
 
@@ -130,21 +151,46 @@ const SYSTEM = [
   "- DO NOT invent facts. Use only what's in the scraped data, audit findings, and web_search results.",
   "- Keep all numbers, prices, addresses, phone numbers, emails, URLs byte-identical to the scrape.",
   "- Keep proper nouns (business name, dish names, place names) verbatim.",
-  "- If you don't have enough info to answer a FAQ, OMIT it. No filler.",
-  "- For reviews, ONLY include real quotes you found via web_search. Cite the platform (Google, TripAdvisor, Tabelog, Yelp, etc.). Never write fictional reviews. If web_search returned no usable reviews, return an empty reviews array.",
-  "- For the rating summary, only include scores aggregated from real platforms found via web_search.",
-  "- ALL OUTPUT MUST BE IN ENGLISH. The audience is international tourists. No foreign-script characters anywhere in summary, about, faqs, hero, meta, reviews, or rating summary. Translate or romanize any non-English term in the input or search results before quoting it.",
+  "- If you don't have enough info for a field, OMIT it (or use null / empty array). No filler. No '?' placeholders.",
+  "- Reviews and press mentions MUST be real quotes from real platforms. NEVER fabricate.",
+  "- Awards must include the official source (Michelin Guide, World's 50 Best, etc.) and year.",
+  "- ALL OUTPUT MUST BE IN ENGLISH. No foreign-script characters anywhere. Translate or romanize any non-English term in the input or search results before quoting it. Romanize proper nouns when they appear in foreign script.",
+  "- Output MUST be strictly valid RFC 8259 JSON. No trailing commas. No comments. No unquoted keys. Escape every literal \" inside a string as \\\". Never break a string across raw newlines — use \\n inside the string.",
   "",
-  "Output a single JSON object with this exact shape (no markdown fences, no commentary, no <thinking>):",
+  "Output a SINGLE JSON object with this exact shape (no markdown fences, no prose, no <thinking>):",
   "{",
-  '  "summary": "one-paragraph AI-friendly summary (40–80 words)",',
-  '  "about": "rewritten about copy (60–140 words). entity-rich, terse",',
-  '  "faqs": [{"q": "question?", "a": "concise factual answer"}],  // 4–7 entries',
+  '  "summary": "one-paragraph AI-friendly summary (40-80 words)",',
+  '  "about": "rewritten about copy (60-140 words), entity-rich, terse",',
+  '  "faqs": [{"q": "question?", "a": "concise factual answer"}],',
   '  "ratingSummary": {"score": 4.6, "count": 480, "platforms": ["Google", "TripAdvisor"]} or null,',
   '  "reviews": [',
   '    {"name": "Sarah K.", "country": "United Kingdom", "flag": "🇬🇧", "rating": 5, "text": "...", "platform": "Google", "date": "March 2025", "sourceUrl": "https://..."}',
-  '  ],  // 0–4 entries, real quotes only',
-  '  "hero": {"heading": "...", "sub": "..."},  // optional, only if current heading is vague',
+  "  ],",
+  '  "webFacts": {',
+  '    "transit": "3 min walk from Ginza Station Exit A2",',
+  '    "parking": "No on-site parking. Paid parking 2 min walk.",',
+  '    "paymentMethods": ["Visa", "Mastercard", "Amex", "Cash"],',
+  '    "languagesSpoken": ["English", "Japanese"],',
+  '    "dressCode": "Smart casual",',
+  '    "accessibility": "Step-free entrance, wheelchair-accessible WC",',
+  '    "familyFriendly": "Children 6+ welcome",',
+  '    "petPolicy": "No pets",',
+  '    "takeaway": "Available for selected items",',
+  '    "delivery": "Not available",',
+  '    "reservationPolicy": "Reservations required, book 2 weeks ahead",',
+  '    "dietaryOptions": ["Vegetarian", "Gluten-free options"],',
+  '    "bestTimeToVisit": "Weekday lunch is least busy",',
+  '    "wifi": "Free Wi-Fi available",',
+  '    "averageCost": "¥15,000-25,000 per person"',
+  "  } or null  // include only keys you actually found",
+  '  "signatureDishes": [',
+  '    {"name": "Otoro Nigiri", "description": "Premium fatty tuna belly nigiri", "why": "Most-mentioned dish on Tabelog"}',
+  "  ],",
+  '  "atmosphereTags": ["intimate", "formal", "date-night"],',
+  '  "discoveredCuisine": ["Japanese", "Omakase"] or null,',
+  '  "discoveredPriceRange": "$$$$" or null,',
+  '  "discoveredSocial": {"instagram": "https://...", "facebook": "https://..."} or null,',
+  '  "hero": {"heading": "...", "sub": "..."},',
   '  "meta": {"title": "30-65 char SEO title", "description": "70-160 char meta description"}',
   "}",
 ].join("\n");
@@ -160,6 +206,39 @@ interface RawReview {
   sourceUrl?: unknown;
 }
 
+interface RawSignatureDish {
+  name?: unknown;
+  description?: unknown;
+  why?: unknown;
+}
+
+interface RawWebFacts {
+  transit?: unknown;
+  parking?: unknown;
+  paymentMethods?: unknown;
+  languagesSpoken?: unknown;
+  dressCode?: unknown;
+  accessibility?: unknown;
+  familyFriendly?: unknown;
+  petPolicy?: unknown;
+  takeaway?: unknown;
+  delivery?: unknown;
+  reservationPolicy?: unknown;
+  dietaryOptions?: unknown;
+  bestTimeToVisit?: unknown;
+  wifi?: unknown;
+  averageCost?: unknown;
+}
+
+interface RawSocial {
+  instagram?: unknown;
+  facebook?: unknown;
+  twitter?: unknown;
+  tiktok?: unknown;
+  youtube?: unknown;
+  line?: unknown;
+}
+
 interface RawEnrichment {
   summary?: string;
   about?: string;
@@ -170,6 +249,12 @@ interface RawEnrichment {
     platforms?: unknown;
   } | null;
   reviews?: RawReview[];
+  webFacts?: RawWebFacts | null;
+  signatureDishes?: RawSignatureDish[];
+  atmosphereTags?: unknown[];
+  discoveredCuisine?: unknown[] | null;
+  discoveredPriceRange?: unknown;
+  discoveredSocial?: RawSocial | null;
   hero?: { heading?: unknown; sub?: unknown };
   meta?: { title?: unknown; description?: unknown };
 }
@@ -182,10 +267,20 @@ function safeString(v: unknown, max = 600): string | undefined {
 }
 
 function safeNumber(v: unknown, min: number, max: number): number | undefined {
-  const n = typeof v === "number" ? v : typeof v === "string" ? parseFloat(v) : NaN;
+  const n =
+    typeof v === "number" ? v : typeof v === "string" ? parseFloat(v) : NaN;
   if (!Number.isFinite(n)) return undefined;
   if (n < min || n > max) return undefined;
   return n;
+}
+
+function safeStringArray(v: unknown, maxLen: number, maxItem: number): string[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out = v
+    .map((x) => safeString(x, maxItem))
+    .filter((x): x is string => !!x)
+    .slice(0, maxLen);
+  return out.length > 0 ? out : undefined;
 }
 
 function parseReviews(raw: RawReview[] | undefined): GuestReview[] | undefined {
@@ -228,6 +323,63 @@ function parseRatingSummary(
   return { score, count: Math.round(count), platforms };
 }
 
+function parseWebFacts(raw: RawWebFacts | null | undefined): WebFacts | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const wf: WebFacts = {
+    transit: safeString(raw.transit, 200),
+    parking: safeString(raw.parking, 200),
+    paymentMethods: safeStringArray(raw.paymentMethods, 10, 40),
+    languagesSpoken: safeStringArray(raw.languagesSpoken, 8, 30),
+    dressCode: safeString(raw.dressCode, 80),
+    accessibility: safeString(raw.accessibility, 200),
+    familyFriendly: safeString(raw.familyFriendly, 120),
+    petPolicy: safeString(raw.petPolicy, 80),
+    takeaway: safeString(raw.takeaway, 120),
+    delivery: safeString(raw.delivery, 120),
+    reservationPolicy: safeString(raw.reservationPolicy, 200),
+    dietaryOptions: safeStringArray(raw.dietaryOptions, 10, 40),
+    bestTimeToVisit: safeString(raw.bestTimeToVisit, 200),
+    wifi: safeString(raw.wifi, 80),
+    averageCost: safeString(raw.averageCost, 80),
+  };
+  const hasAny = Object.values(wf).some((v) => v !== undefined);
+  return hasAny ? wf : undefined;
+}
+
+function parseSignatureDishes(
+  raw: RawSignatureDish[] | undefined,
+): SignatureDish[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: SignatureDish[] = [];
+  for (const r of raw) {
+    const name = safeString(r.name, 100);
+    if (!name) continue;
+    out.push({
+      name,
+      description: safeString(r.description, 400),
+      why: safeString(r.why, 200),
+    });
+  }
+  return out.length > 0 ? out.slice(0, 8) : undefined;
+}
+
+
+function parseDiscoveredSocial(
+  raw: RawSocial | null | undefined,
+): Partial<SocialLinks> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const out: Partial<SocialLinks> = {
+    instagram: safeString(raw.instagram, 400),
+    facebook: safeString(raw.facebook, 400),
+    twitter: safeString(raw.twitter, 400),
+    tiktok: safeString(raw.tiktok, 400),
+    youtube: safeString(raw.youtube, 400),
+    line: safeString(raw.line, 400),
+  };
+  const hasAny = Object.values(out).some((v) => v !== undefined);
+  return hasAny ? out : undefined;
+}
+
 interface WebSearchTool {
   type: string;
   name: string;
@@ -259,7 +411,7 @@ export async function enrichWithAudit(
   try {
     const res = await claude.messages.create({
       model: "claude-opus-4-7",
-      max_tokens: 3200,
+      max_tokens: 6000,
       system: [
         {
           type: "text",
@@ -276,9 +428,6 @@ export async function enrichWithAudit(
       messages: [{ role: "user", content: prompt }],
     });
 
-    // Collect text across multiple content blocks (web_search interleaves
-    // tool_use, tool_result, and text blocks). Only `text` blocks contain
-    // the model's final JSON; tool_result blocks contain raw search hits.
     const txt = res.content
       .map((c) => ("text" in c && typeof c.text === "string" ? c.text : ""))
       .join("\n")
@@ -297,13 +446,25 @@ export async function enrichWithAudit(
 
     const reviews = parseReviews(parsed.reviews);
     const ratingSummary = parseRatingSummary(parsed.ratingSummary ?? null);
+    const webFacts = parseWebFacts(parsed.webFacts ?? null);
+    const signatureDishes = parseSignatureDishes(parsed.signatureDishes);
+    const atmosphereTags = safeStringArray(parsed.atmosphereTags, 8, 24);
+    const discoveredCuisine = safeStringArray(parsed.discoveredCuisine, 6, 40);
+    const discoveredPriceRange = safeString(parsed.discoveredPriceRange, 8);
+    const discoveredSocial = parseDiscoveredSocial(parsed.discoveredSocial ?? null);
 
     const enrichment: GeoEnrichment = {
       summary: safeString(parsed.summary, 600),
       about: safeString(parsed.about, 1200),
       faqs,
-      reviews: reviews && reviews.length > 0 ? reviews : undefined,
+      reviews,
       ratingSummary,
+      webFacts,
+      signatureDishes,
+      atmosphereTags,
+      discoveredCuisine,
+      discoveredPriceRange,
+      discoveredSocial,
       hero:
         parsed.hero && (parsed.hero.heading || parsed.hero.sub)
           ? {
@@ -320,11 +481,15 @@ export async function enrichWithAudit(
           : undefined,
       notes,
     };
-    if (reviews && reviews.length > 0) {
-      notes.push(`web_search returned ${reviews.length} review(s).`);
-    } else {
-      notes.push("web_search returned no usable reviews.");
-    }
+
+    // Trace the result so the operator can see what web_search actually surfaced.
+    const counts = {
+      reviews: reviews?.length ?? 0,
+      signatureDishes: signatureDishes?.length ?? 0,
+      webFactKeys: webFacts ? Object.values(webFacts).filter((v) => v !== undefined).length : 0,
+      atmosphereTags: atmosphereTags?.length ?? 0,
+    };
+    notes.push(`web_search enrichment counts: ${JSON.stringify(counts)}`);
     return enrichment;
   } catch (e) {
     notes.push(
@@ -336,7 +501,10 @@ export async function enrichWithAudit(
 
 /**
  * Apply the enrichment back onto the PublishedSite: merge into meta, hero,
- * and stash the whole thing in `site.geo` for the GEO file builders.
+ * data, and stash the whole thing in `site.geo` for the GEO file builders.
+ *
+ * Discovered fields (cuisine, priceRange, social) only override scraped data
+ * where the scrape came up empty — we never overwrite ground truth.
  */
 export function applyEnrichment(
   site: PublishedSite,
@@ -351,19 +519,46 @@ export function applyEnrichment(
     next.meta = { ...next.meta, description: enrichment.meta.description };
   }
 
-  if (enrichment.hero) {
-    if (
-      next.data.industry === "restaurant" ||
-      next.data.industry === "general"
-    ) {
-      const data = { ...next.data };
+  if (
+    next.data.industry === "restaurant" ||
+    next.data.industry === "general"
+  ) {
+    const data = { ...next.data };
+
+    if (enrichment.hero) {
       data.hero = {
         ...data.hero,
         heading: enrichment.hero.heading ?? data.hero.heading,
         sub: enrichment.hero.sub ?? data.hero.sub,
       };
-      next.data = data;
     }
+
+    if (data.industry === "restaurant") {
+      const r = data as RestaurantData;
+      // Discovered cuisine — only fill if scrape missed it.
+      if (
+        enrichment.discoveredCuisine?.length &&
+        (!r.cuisine || r.cuisine.length === 0)
+      ) {
+        r.cuisine = enrichment.discoveredCuisine;
+      }
+      // Discovered price range — only fill if scrape missed it.
+      if (enrichment.discoveredPriceRange && !r.priceRange) {
+        r.priceRange = enrichment.discoveredPriceRange;
+      }
+      // Discovered social — fill each missing key.
+      if (enrichment.discoveredSocial) {
+        const social = { ...r.social };
+        for (const [key, val] of Object.entries(enrichment.discoveredSocial)) {
+          if (val && !social[key as keyof SocialLinks]) {
+            social[key as keyof SocialLinks] = val;
+          }
+        }
+        r.social = social;
+      }
+    }
+
+    next.data = data;
   }
   return next;
 }

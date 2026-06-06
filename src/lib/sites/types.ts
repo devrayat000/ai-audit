@@ -150,6 +150,50 @@ export interface RatingSummary {
   platforms?: string[];
 }
 
+/**
+ * Practical facts pulled from the web (Google Maps, TripAdvisor, official
+ * directories) that the scraped HTML usually doesn't surface cleanly.
+ */
+export interface WebFacts {
+  /** e.g. "3 minute walk from Ginza Station (Exit A2)". */
+  transit?: string;
+  /** Parking guidance. */
+  parking?: string;
+  /** Payment methods accepted, e.g. ["Visa", "Mastercard", "Cash"]. */
+  paymentMethods?: string[];
+  /** Languages spoken by staff, e.g. ["English", "Japanese"]. */
+  languagesSpoken?: string[];
+  /** Dress code, e.g. "Smart casual". */
+  dressCode?: string;
+  /** Accessibility notes, e.g. "Step-free entrance, wheelchair-accessible WC". */
+  accessibility?: string;
+  /** Child/family policy summary. */
+  familyFriendly?: string;
+  /** Pet policy summary. */
+  petPolicy?: string;
+  /** Takeaway availability. */
+  takeaway?: string;
+  /** Delivery availability. */
+  delivery?: string;
+  /** Reservation policy summary (walk-in OK? days in advance?). */
+  reservationPolicy?: string;
+  /** Dietary options served, e.g. ["Vegetarian", "Vegan", "Halal", "Gluten-free"]. */
+  dietaryOptions?: string[];
+  /** Best time to visit / typical wait time / busy hours. */
+  bestTimeToVisit?: string;
+  /** Wi-Fi availability. */
+  wifi?: string;
+  /** Average meal cost per person, e.g. "¥15,000–25,000". */
+  averageCost?: string;
+}
+
+export interface SignatureDish {
+  name: string;
+  description?: string;
+  /** Why it's notable (most-ordered / chef's pick / press-mentioned). */
+  why?: string;
+}
+
 export interface GeoEnrichment {
   /** One-paragraph AI-friendly summary fronting the site. */
   summary?: string;
@@ -161,6 +205,18 @@ export interface GeoEnrichment {
   ratingSummary?: RatingSummary;
   /** Quoted guest reviews — pulled via web_search. */
   reviews?: GuestReview[];
+  /** Practical facts pulled from the web. */
+  webFacts?: WebFacts;
+  /** Most-ordered / press-mentioned signature dishes (may include some not on the scraped menu). */
+  signatureDishes?: SignatureDish[];
+  /** Atmosphere tags, e.g. ["intimate", "romantic", "lively"]. */
+  atmosphereTags?: string[];
+  /** Cuisine list discovered via web (only used if scrape didn't catch it). */
+  discoveredCuisine?: string[];
+  /** Price range discovered via web (only used if scrape didn't catch it). */
+  discoveredPriceRange?: string;
+  /** Social links discovered via web (only used to fill missing scraped fields). */
+  discoveredSocial?: Partial<SocialLinks>;
   /** Markdown body of /llms.txt (canonical short map). */
   llmsTxt?: string;
   /** Markdown body of /llms-full.txt (full fact dump). */
