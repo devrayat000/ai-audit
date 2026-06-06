@@ -26,6 +26,7 @@ import type {
   PublishedSite,
   RestaurantData,
 } from "./types";
+import { parseJsonLenient } from "./json-extract";
 
 const MODEL = "claude-opus-4-7";
 const MENU_BATCH_SIZE = 12;
@@ -41,18 +42,6 @@ function getClient(): Anthropic | null {
   }
 }
 
-function extractJsonObject(text: string): string {
-  // Be tolerant: strip ```json fences, find outermost {…}.
-  const cleaned = text
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```\s*$/i, "")
-    .trim();
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start < 0 || end < 0 || end <= start) return "{}";
-  return cleaned.slice(start, end + 1);
-}
-
 function hasForeignScript(s: string): boolean {
   return /[ঀ-৿ऀ-ॿ؀-ۿݐ-ݿ֐-׿฀-๿぀-ゟ゠-ヿ가-힯一-鿿Ѐ-ӿͰ-Ͽ]/.test(s);
 }
@@ -61,6 +50,7 @@ const COMMON_RULES = `You translate scraped restaurant content into clean, idiom
 
 ABSOLUTE rules:
 - Output ONLY a single JSON object. No prose, no markdown fences, no commentary.
+- Output MUST be strictly valid RFC 8259 JSON. No trailing commas. No comments. No unquoted keys. Escape every literal " inside a string value as \\" and every newline as \\n. Never break a string across raw newlines.
 - EVERY natural-language string MUST be in English. NO foreign-script characters (CJK / Cyrillic / Arabic / Thai / Hangul / Devanagari / Bengali / Greek / etc.) may appear in any output value. If you see them in input, you MUST translate or romanize them. This is non-negotiable.
 - Dish names: "English Name (Romanized Original)". Examples: "Beef Pho (Phở Bò)", "Grilled Pork Belly (Samgyeopsal)", "Cold Buckwheat Noodles (Zaru Soba)". Use the standard romanization for the language (Hepburn for Japanese, Pinyin for Mandarin, Revised Romanization for Korean, Hanyu Pinyin for Chinese, etc.). If the dish has a widely-known English name (e.g. "Sushi"), keep the English name and omit the parenthetical.
 - Every menu item MUST have an English "description" field — a 1-sentence factual description of what the dish is (key ingredients / cooking method / category). If the source had no description, write a short factual one. NEVER invent specific ingredients not implied by the source; if unsure, describe by category (e.g. "a traditional Korean rice porridge").
@@ -171,7 +161,7 @@ async function callClaude(
     .map((c) => ("text" in c && typeof c.text === "string" ? c.text : ""))
     .join("")
     .trim();
-  return JSON.parse(extractJsonObject(txt));
+  return parseJsonLenient(txt);
 }
 
 async function translateCore(

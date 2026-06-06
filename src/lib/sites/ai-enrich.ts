@@ -7,6 +7,7 @@ import type {
   RatingSummary,
   RestaurantData,
 } from "./types";
+import { parseJsonLenient } from "./json-extract";
 
 function getClient(): Anthropic | null {
   const apiKey = process.env.ANTHROPIC_API_KEY ?? "";
@@ -187,40 +188,6 @@ function safeNumber(v: unknown, min: number, max: number): number | undefined {
   return n;
 }
 
-function extractJsonObject(text: string): string {
-  // Web search blocks may sandwich the JSON with citations / tool output text.
-  // Scan for first balanced JSON object.
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escape = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      if (escape) {
-        escape = false;
-      } else if (ch === "\\") {
-        escape = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-      continue;
-    }
-    if (ch === "{") {
-      if (depth === 0) start = i;
-      depth++;
-    } else if (ch === "}") {
-      depth--;
-      if (depth === 0 && start >= 0) return text.slice(start, i + 1);
-    }
-  }
-  return "{}";
-}
-
 function parseReviews(raw: RawReview[] | undefined): GuestReview[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const out: GuestReview[] = [];
@@ -316,8 +283,7 @@ export async function enrichWithAudit(
       .map((c) => ("text" in c && typeof c.text === "string" ? c.text : ""))
       .join("\n")
       .trim();
-    const json = extractJsonObject(txt);
-    const parsed = JSON.parse(json) as RawEnrichment;
+    const parsed = parseJsonLenient(txt) as RawEnrichment;
 
     const faqs = Array.isArray(parsed.faqs)
       ? parsed.faqs
