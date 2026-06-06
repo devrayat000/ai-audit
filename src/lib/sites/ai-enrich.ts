@@ -1,6 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { AuditReport, CheckResult } from "../types";
-import type { GeoEnrichment, PublishedSite, RestaurantData } from "./types";
+import type {
+  GeoEnrichment,
+  GuestReview,
+  PublishedSite,
+  RatingSummary,
+  RestaurantData,
+} from "./types";
 
 function getClient(): Anthropic | null {
   const apiKey = process.env.ANTHROPIC_API_KEY ?? "";
@@ -15,10 +21,7 @@ function getClient(): Anthropic | null {
 
 function relevantAuditFindings(report?: AuditReport): CheckResult[] {
   if (!report) return [];
-  const all = [
-    ...report.siteChecks,
-    ...report.pages.flatMap((p) => p.checks),
-  ];
+  const all = [...report.siteChecks, ...report.pages.flatMap((p) => p.checks)];
   return all
     .filter((c) => c.status !== "pass")
     .sort((a, b) => b.maxScore - a.maxScore - (b.score - a.score))
@@ -41,7 +44,9 @@ function compactSitePayload(site: PublishedSite): Record<string, unknown> {
       contact: r.contact,
       hours: r.hours,
       menuSampleItems: (r.menu?.sections ?? [])
-        .flatMap((s) => s.items.slice(0, 6).map((i) => ({ section: s.title, ...i })))
+        .flatMap((s) =>
+          s.items.slice(0, 6).map((i) => ({ section: s.title, ...i })),
+        )
         .slice(0, 24),
       social: r.social,
       sourceUrl: site.sourceUrl,
@@ -68,25 +73,42 @@ function buildPrompt(site: PublishedSite, findings: CheckResult[]): string {
     message: c.message,
     fix: c.fixSuggestion,
   }));
+  const d = site.data;
+  const isRestaurant = d.industry === "restaurant";
+  const cityLine = isRestaurant
+    ? [
+        (d as RestaurantData).contact.city,
+        (d as RestaurantData).contact.region,
+        (d as RestaurantData).contact.country,
+      ]
+        .filter(Boolean)
+        .join(", ")
+    : "";
+
+  const searchHints = isRestaurant
+    ? [
+        "",
+        "USE web_search to find:",
+        `- Recent guest reviews of "${d.name}"${cityLine ? ` in ${cityLine}` : ""}`,
+        `- Aggregate ratings on Google Maps, TripAdvisor, Tabelog, Yelp, OpenTable, or local platforms`,
+        `- Signature dishes, awards, press coverage, accolades`,
+        `- Any practical info missing from the scrape (transit access, dress code, kid-friendliness, payment methods)`,
+        "",
+        "Search queries to try (pick whichever fits the locale):",
+        `  - "${d.name}" ${cityLine || ""} reviews`,
+        `  - "${d.name}" ${cityLine || ""} TripAdvisor OR Google`,
+        `  - "${d.name}" ${cityLine || ""} signature dish`,
+        `  - "${d.name}" award OR michelin OR best`,
+        "",
+        "Reviews MUST be quoted from real search results — never invent them. If you cannot find at least 2 real reviews, return an empty reviews array.",
+      ].join("\n")
+    : [
+        "",
+        "USE web_search to find recent press, customer reviews, awards, and missing practical info about the business.",
+        "Reviews MUST be quoted from real search results — never invent.",
+      ].join("\n");
+
   return [
-    "You are a GEO (Generative Engine Optimization) editor. Your job is to enrich a templated site so AI engines can read, summarize, and cite it accurately.",
-    "",
-    "Hard rules:",
-    "- DO NOT invent facts. Use only what's in the scraped data and audit findings.",
-    "- Keep all numbers, prices, addresses, phone numbers, emails, URLs byte-identical.",
-    "- Keep proper nouns (business name, dish names, place names) verbatim.",
-    "- If you don't have enough info to answer a FAQ, OMIT it. No filler.",
-    "- ALL OUTPUT MUST BE IN ENGLISH. The audience is international tourists. No foreign-script characters anywhere in summary, about, faqs, hero, or meta. Translate or romanize any non-English term in the input before quoting it.",
-    "",
-    "Output a single JSON object with this shape (no markdown fences, no commentary):",
-    "{",
-    '  "summary": "one-paragraph AI-friendly summary (40–80 words)",',
-    '  "about": "rewritten about copy (60–140 words). entity-rich, terse",',
-    '  "faqs": [{"q": "question?", "a": "concise factual answer"}],  // 4–7 entries',
-    '  "hero": {"heading": "...", "sub": "..."},  // optional, only if current heading is vague',
-    '  "meta": {"title": "30-65 char SEO title", "description": "70-160 char meta description"}',
-    "}",
-    "",
     "Scraped site data:",
     "```json",
     JSON.stringify(compact, null, 2),
@@ -96,13 +118,57 @@ function buildPrompt(site: PublishedSite, findings: CheckResult[]): string {
     "```json",
     JSON.stringify(auditSummary, null, 2),
     "```",
+    searchHints,
   ].join("\n");
+}
+
+const SYSTEM = [
+  "You are a GEO (Generative Engine Optimization) editor. Your job is to enrich a templated site so AI engines can read, summarize, and cite it accurately.",
+  "",
+  "Hard rules:",
+  "- DO NOT invent facts. Use only what's in the scraped data, audit findings, and web_search results.",
+  "- Keep all numbers, prices, addresses, phone numbers, emails, URLs byte-identical to the scrape.",
+  "- Keep proper nouns (business name, dish names, place names) verbatim.",
+  "- If you don't have enough info to answer a FAQ, OMIT it. No filler.",
+  "- For reviews, ONLY include real quotes you found via web_search. Cite the platform (Google, TripAdvisor, Tabelog, Yelp, etc.). Never write fictional reviews. If web_search returned no usable reviews, return an empty reviews array.",
+  "- For the rating summary, only include scores aggregated from real platforms found via web_search.",
+  "- ALL OUTPUT MUST BE IN ENGLISH. The audience is international tourists. No foreign-script characters anywhere in summary, about, faqs, hero, meta, reviews, or rating summary. Translate or romanize any non-English term in the input or search results before quoting it.",
+  "",
+  "Output a single JSON object with this exact shape (no markdown fences, no commentary, no <thinking>):",
+  "{",
+  '  "summary": "one-paragraph AI-friendly summary (40–80 words)",',
+  '  "about": "rewritten about copy (60–140 words). entity-rich, terse",',
+  '  "faqs": [{"q": "question?", "a": "concise factual answer"}],  // 4–7 entries',
+  '  "ratingSummary": {"score": 4.6, "count": 480, "platforms": ["Google", "TripAdvisor"]} or null,',
+  '  "reviews": [',
+  '    {"name": "Sarah K.", "country": "United Kingdom", "flag": "🇬🇧", "rating": 5, "text": "...", "platform": "Google", "date": "March 2025", "sourceUrl": "https://..."}',
+  '  ],  // 0–4 entries, real quotes only',
+  '  "hero": {"heading": "...", "sub": "..."},  // optional, only if current heading is vague',
+  '  "meta": {"title": "30-65 char SEO title", "description": "70-160 char meta description"}',
+  "}",
+].join("\n");
+
+interface RawReview {
+  name?: unknown;
+  flag?: unknown;
+  country?: unknown;
+  rating?: unknown;
+  text?: unknown;
+  platform?: unknown;
+  date?: unknown;
+  sourceUrl?: unknown;
 }
 
 interface RawEnrichment {
   summary?: string;
   about?: string;
   faqs?: { q?: unknown; a?: unknown }[];
+  ratingSummary?: {
+    score?: unknown;
+    count?: unknown;
+    platforms?: unknown;
+  } | null;
+  reviews?: RawReview[];
   hero?: { heading?: unknown; sub?: unknown };
   meta?: { title?: unknown; description?: unknown };
 }
@@ -114,12 +180,98 @@ function safeString(v: unknown, max = 600): string | undefined {
   return t.slice(0, max);
 }
 
-function extractJsonObject(text: string): string {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end < 0 || end <= start) return "{}";
-  return text.slice(start, end + 1);
+function safeNumber(v: unknown, min: number, max: number): number | undefined {
+  const n = typeof v === "number" ? v : typeof v === "string" ? parseFloat(v) : NaN;
+  if (!Number.isFinite(n)) return undefined;
+  if (n < min || n > max) return undefined;
+  return n;
 }
+
+function extractJsonObject(text: string): string {
+  // Web search blocks may sandwich the JSON with citations / tool output text.
+  // Scan for first balanced JSON object.
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && start >= 0) return text.slice(start, i + 1);
+    }
+  }
+  return "{}";
+}
+
+function parseReviews(raw: RawReview[] | undefined): GuestReview[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: GuestReview[] = [];
+  for (const r of raw) {
+    const name = safeString(r.name, 80);
+    const text = safeString(r.text, 600);
+    const rating = safeNumber(r.rating, 1, 5);
+    if (!name || !text || rating === undefined) continue;
+    out.push({
+      name,
+      flag: safeString(r.flag, 8),
+      country: safeString(r.country, 80),
+      rating: Math.round(rating),
+      text,
+      platform: safeString(r.platform, 40),
+      date: safeString(r.date, 40),
+      sourceUrl: safeString(r.sourceUrl, 400),
+    });
+  }
+  return out.slice(0, 6);
+}
+
+function parseRatingSummary(
+  raw: RawEnrichment["ratingSummary"],
+): RatingSummary | undefined {
+  if (!raw) return undefined;
+  const score = safeNumber(raw.score, 0, 5);
+  const count = safeNumber(raw.count, 0, 1_000_000);
+  if (score === undefined || count === undefined) return undefined;
+  let platforms: string[] | undefined;
+  if (Array.isArray(raw.platforms)) {
+    platforms = raw.platforms
+      .map((p) => safeString(p, 40))
+      .filter((p): p is string => !!p)
+      .slice(0, 8);
+    if (platforms.length === 0) platforms = undefined;
+  }
+  return { score, count: Math.round(count), platforms };
+}
+
+interface WebSearchTool {
+  type: string;
+  name: string;
+  max_uses?: number;
+}
+
+const WEB_SEARCH_TOOL: WebSearchTool = {
+  name: "web_search",
+  type: "web_search_20260209",
+  max_uses: 5,
+};
 
 export async function enrichWithAudit(
   site: PublishedSite,
@@ -140,14 +292,29 @@ export async function enrichWithAudit(
   try {
     const res = await claude.messages.create({
       model: "claude-opus-4-7",
-      max_tokens: 1600,
-      system:
-        "You are a meticulous GEO editor. Output ONLY a single JSON object. No prose, no markdown fences.",
+      max_tokens: 3200,
+      system: [
+        {
+          type: "text",
+          text: "You are a meticulous GEO editor. Output ONLY a single JSON object. No prose, no markdown fences.",
+        },
+        {
+          type: "text",
+          text: SYSTEM,
+        },
+      ],
+      tools: [WEB_SEARCH_TOOL] as unknown as Parameters<
+        typeof claude.messages.create
+      >[0]["tools"],
       messages: [{ role: "user", content: prompt }],
     });
+
+    // Collect text across multiple content blocks (web_search interleaves
+    // tool_use, tool_result, and text blocks). Only `text` blocks contain
+    // the model's final JSON; tool_result blocks contain raw search hits.
     const txt = res.content
       .map((c) => ("text" in c && typeof c.text === "string" ? c.text : ""))
-      .join("")
+      .join("\n")
       .trim();
     const json = extractJsonObject(txt);
     const parsed = JSON.parse(json) as RawEnrichment;
@@ -162,10 +329,15 @@ export async function enrichWithAudit(
           .slice(0, 8)
       : undefined;
 
+    const reviews = parseReviews(parsed.reviews);
+    const ratingSummary = parseRatingSummary(parsed.ratingSummary ?? null);
+
     const enrichment: GeoEnrichment = {
       summary: safeString(parsed.summary, 600),
       about: safeString(parsed.about, 1200),
       faqs,
+      reviews: reviews && reviews.length > 0 ? reviews : undefined,
+      ratingSummary,
       hero:
         parsed.hero && (parsed.hero.heading || parsed.hero.sub)
           ? {
@@ -182,9 +354,16 @@ export async function enrichWithAudit(
           : undefined,
       notes,
     };
+    if (reviews && reviews.length > 0) {
+      notes.push(`web_search returned ${reviews.length} review(s).`);
+    } else {
+      notes.push("web_search returned no usable reviews.");
+    }
     return enrichment;
   } catch (e) {
-    notes.push(`Enrichment failed: ${e instanceof Error ? e.message : String(e)}`);
+    notes.push(
+      `Enrichment failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
     return { notes };
   }
 }
@@ -193,7 +372,10 @@ export async function enrichWithAudit(
  * Apply the enrichment back onto the PublishedSite: merge into meta, hero,
  * and stash the whole thing in `site.geo` for the GEO file builders.
  */
-export function applyEnrichment(site: PublishedSite, enrichment: GeoEnrichment): PublishedSite {
+export function applyEnrichment(
+  site: PublishedSite,
+  enrichment: GeoEnrichment,
+): PublishedSite {
   const next: PublishedSite = { ...site, geo: enrichment };
 
   if (enrichment.meta?.title) {
@@ -204,7 +386,10 @@ export function applyEnrichment(site: PublishedSite, enrichment: GeoEnrichment):
   }
 
   if (enrichment.hero) {
-    if (next.data.industry === "restaurant" || next.data.industry === "general") {
+    if (
+      next.data.industry === "restaurant" ||
+      next.data.industry === "general"
+    ) {
       const data = { ...next.data };
       data.hero = {
         ...data.hero,

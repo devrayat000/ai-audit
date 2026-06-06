@@ -122,6 +122,34 @@ export interface FaqQa {
   a: string;
 }
 
+export interface GuestReview {
+  /** Reviewer display name (or initials). */
+  name: string;
+  /** Country emoji flag (e.g. "🇯🇵"). Optional. */
+  flag?: string;
+  /** Country / region of reviewer. */
+  country?: string;
+  /** 1–5 stars. */
+  rating: number;
+  /** The review text — trimmed, no surrounding quotes. */
+  text: string;
+  /** Source platform name (e.g. "Google", "TripAdvisor", "Tabelog"). */
+  platform?: string;
+  /** Human-readable date (e.g. "March 2025") or year. */
+  date?: string;
+  /** Source URL if web_search returned one. */
+  sourceUrl?: string;
+}
+
+export interface RatingSummary {
+  /** Average score, typically 0–5 (will display as `score`/5). */
+  score: number;
+  /** Total number of reviews counted across platforms. */
+  count: number;
+  /** Optional list of platforms aggregated. */
+  platforms?: string[];
+}
+
 export interface GeoEnrichment {
   /** One-paragraph AI-friendly summary fronting the site. */
   summary?: string;
@@ -129,6 +157,10 @@ export interface GeoEnrichment {
   about?: string;
   /** Curated FAQ that AI engines can quote. */
   faqs?: FaqQa[];
+  /** Aggregate rating + platform list — pulled via web_search. */
+  ratingSummary?: RatingSummary;
+  /** Quoted guest reviews — pulled via web_search. */
+  reviews?: GuestReview[];
   /** Markdown body of /llms.txt (canonical short map). */
   llmsTxt?: string;
   /** Markdown body of /llms-full.txt (full fact dump). */

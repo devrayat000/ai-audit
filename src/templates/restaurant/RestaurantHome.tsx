@@ -20,6 +20,7 @@ import { restaurantJsonLd } from "./schema";
 import { proxied } from "./image";
 import { RestaurantNav } from "./RestaurantNav";
 import { RestaurantFooter } from "./RestaurantFooter";
+import { ReviewsSection } from "./ReviewsSection";
 import {
   buildNavLinks,
   buildReservationCta,
@@ -356,32 +357,12 @@ export function RestaurantHome({ site }: Props) {
           </section>
         )}
 
-        {/* AI Review Summary */}
-        {site.geo?.summary && (
-          <section className="py-14 md:py-20 bg-secondary/40 border-t border-border">
-            <div className="max-w-3xl mx-auto px-6 lg:px-10 text-center">
-              <p className="font-sans text-[10px] uppercase tracking-[0.3em] text-gold mb-3">
-                Guest Voices
-              </p>
-              <h2 className="font-serif text-4xl md:text-5xl font-light text-foreground mb-6 text-balance">
-                What Brings Guests Back
-              </h2>
-              <div className="flex items-center justify-center gap-1.5 mb-8">
-                {[1, 2, 3, 4, 5].map((s) => (
-                  <Star key={s} size={16} className="fill-gold text-gold" />
-                ))}
-              </div>
-              <div className="bg-card border border-border p-6 md:p-8 text-left hover:shadow-lg hover:border-gold/30 transition-all duration-300">
-                <p className="font-sans text-[10px] uppercase tracking-[0.2em] text-gold mb-3">
-                  AI Review Summary
-                </p>
-                <p className="font-sans text-sm md:text-base text-muted-foreground leading-relaxed">
-                  {site.geo.summary}
-                </p>
-              </div>
-            </div>
-          </section>
-        )}
+        {/* Reviews + AI Summary */}
+        <ReviewsSection
+          summary={site.geo?.summary}
+          ratingSummary={site.geo?.ratingSummary}
+          reviews={site.geo?.reviews}
+        />
 
         {/* Location */}
         <section

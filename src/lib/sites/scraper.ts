@@ -34,6 +34,38 @@ const DAY_MAP: Record<string, OpeningHour["day"]> = {
 const PRICE_RE =
   /(?:(?:¥|\$|€|£|₹|৳|RM|₩|฿|₫|₱|HK\$|S\$|NT\$|CHF|kr|zł|R\$)\s?\d[\d.,]*)|(?:\b\d[\d,]*\.\d{2}\b)|(?:\b\d[\d,]{2,}\s?(?:円|JPY|USD|EUR|GBP|INR|BDT|TWD|HKD|KRW|THB|VND|PHP|MYR|IDR|SGD)\b)/i;
 
+const PRICE_SUFFIX_DISQUALIFIERS =
+  /\s*(?:\/\s*(?:month|year|mo|yr|hr|hour|day|wk|week|person|pax|pp|guest)|%|off|discount)\b/i;
+
+const NON_MENU_NAME_RE =
+  /\b(home|about|contact|reservation|reserve|booking|menu|career|jobs?|gallery|news|press|blog|story|location|hours|directions|order|delivery|takeout|takeaway|sign in|sign up|signin|signup|login|log\s?in|log\s?out|register|account|profile|cart|checkout|wishlist|search|filter|sort|share|follow|subscribe|newsletter|privacy|terms|policy|cookie|copyright|all rights reserved|©|powered by|read more|learn more|view more|see all|show all|next|previous|view|details|info|information|read review|write a review|©\s?\d{4}|all-?inclusive|free shipping|free delivery|track order|return policy|faq|help|support|download|app store|google play)\b/i;
+
+function isLikelyChrome(s: string): boolean {
+  return NON_MENU_NAME_RE.test(s);
+}
+
+function isValidPrice(price: string | undefined): boolean {
+  if (!price) return false;
+  if (PRICE_SUFFIX_DISQUALIFIERS.test(price)) return false;
+  const digits = price.match(/\d[\d.,]*/);
+  if (!digits) return false;
+  const num = parseFloat(digits[0].replace(/[,]/g, ""));
+  if (!Number.isFinite(num)) return false;
+  // Reject obvious year stamps, version numbers, page counters.
+  if (num >= 1900 && num <= 2100 && !/[.,]/.test(digits[0])) return false;
+  if (num <= 0) return false;
+  return true;
+}
+
+function isInChromeRegion($el: Cheerio<Element>): boolean {
+  if (
+    $el.closest("nav, header, footer, aside, .nav, .navbar, .menu-nav, .topbar, .sidebar, .breadcrumb, .footer, .header, .cookies, .cookie-banner, .newsletter, .subscribe, .login, .auth, .cart, .checkout").length > 0
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function uniq<T>(arr: T[], key: (v: T) => string): T[] {
   const seen = new Set<string>();
   const out: T[] = [];
@@ -476,10 +508,12 @@ function extractMenuFromClassedBlocks(
   const sections: MenuSection[] = [];
   $(SECTION_BLOCK_SELECTORS.join(",")).each((_, sec) => {
     const $sec = $(sec as Element);
+    if (isInChromeRegion($sec)) return;
     const title =
       clean($sec.find("h1, h2, h3, h4, .menu-section-title, [class*='title']").first().text()) ??
       clean($sec.attr("data-title")) ??
       "Menu";
+    if (isLikelyChrome(title)) return;
     const items = extractItemsFromContainer($sec, $, pageUrl);
     if (items.length >= 2) sections.push({ title, items });
   });
@@ -500,10 +534,11 @@ function extractItemsFromContainer(
   });
 
   if (items.length === 0) {
-    // fall back to any li inside the container with a price string
+    // fall back to any li inside the container — but require a price string,
+    // otherwise nav/footer links get picked up.
     $container.find("li").each((_, el) => {
       const $el = $(el);
-      const item = parseItemElement($el, $, pageUrl);
+      const item = parseItemElement($el, $, pageUrl, { requirePrice: true });
       if (item) items.push(item);
     });
   }
@@ -515,7 +550,11 @@ function parseItemElement(
   $el: Cheerio<Element>,
   $: CheerioAPI,
   pageUrl: string,
+  opts: { requirePrice?: boolean } = {},
 ): MenuItem | null {
+  // Reject if inside obvious chrome (nav/header/footer/sidebar/etc.).
+  if (isInChromeRegion($el)) return null;
+
   // Name lookup: dedicated child classes first.
   const nameSelectors = [
     "[class*='menu-item-title']",
@@ -547,12 +586,11 @@ function parseItemElement(
   let priceText: string | undefined;
   for (const sel of priceSelectors) {
     const t = clean($el.find(sel).first().text());
-    if (t && PRICE_RE.test(t)) {
-      const m = t.match(PRICE_RE);
-      if (m) {
-        priceText = m[0];
-        break;
-      }
+    if (!t) continue;
+    const m = t.match(PRICE_RE);
+    if (m && isValidPrice(m[0])) {
+      priceText = m[0];
+      break;
     }
   }
 
@@ -582,7 +620,7 @@ function parseItemElement(
     const raw = clean($el.text());
     if (!raw) return null;
     const m = raw.match(PRICE_RE);
-    if (m && !priceText) priceText = m[0];
+    if (m && !priceText && isValidPrice(m[0])) priceText = m[0];
     if (!name) {
       const candidate = raw
         .replace(priceText ?? "", "")
@@ -594,6 +632,8 @@ function parseItemElement(
 
   if (!name || name.length < 2) return null;
   if (name.length > 120) return null;
+  if (isLikelyChrome(name)) return null;
+  if (opts.requirePrice && !priceText) return null;
 
   // Image.
   let image: ImageRef | undefined;
@@ -627,9 +667,11 @@ function extractMenuFromHeadings(
   const headings = $("h2, h3, h4").toArray();
   for (const h of headings) {
     const $h = $(h);
+    if (isInChromeRegion($h)) continue;
     const title = clean($h.text());
     if (!title) continue;
     if (title.length > 80) continue;
+    if (isLikelyChrome(title)) continue;
     const items = collectMenuItemsAfter($, h, pageUrl);
     if (items.length >= 2) {
       sections.push({ title, items });
@@ -667,16 +709,16 @@ function collectMenuItemsAfter(
         const item = parseItemElement($(el), $, pageUrl);
         if (item) items.push(item);
       });
-      // 2. Try li within the sibling.
+      // 2. Try li within the sibling — require price to avoid nav lists.
       if (items.length === 0) {
         $cur.find("li").each((_, li) => {
-          const item = parseItemElement($(li), $, pageUrl);
+          const item = parseItemElement($(li), $, pageUrl, { requirePrice: true });
           if (item) items.push(item);
         });
       }
-      // 3. The sibling itself may be a single item card.
+      // 3. The sibling itself may be a single item card (require price).
       if (items.length === 0) {
-        const direct = parseItemElement($cur, $, pageUrl);
+        const direct = parseItemElement($cur, $, pageUrl, { requirePrice: true });
         if (direct) items.push(direct);
       }
     }
@@ -689,7 +731,9 @@ function extractMenuFromDl($: CheerioAPI, pageUrl: string): MenuSection[] {
   const sections: MenuSection[] = [];
   $("dl").each((_, dl) => {
     const $dl = $(dl);
+    if (isInChromeRegion($dl)) return;
     const heading = clean($dl.prev("h1, h2, h3, h4").text()) ?? "Menu";
+    if (isLikelyChrome(heading)) return;
     const items: MenuItem[] = [];
     const children = $dl.children().toArray();
     for (let i = 0; i < children.length; i++) {
@@ -704,7 +748,8 @@ function extractMenuFromDl($: CheerioAPI, pageUrl: string): MenuSection[] {
         .trim()
         .slice(0, 120);
       if (name.length < 2) continue;
-      const priceFromName = nameMatch?.[0];
+      if (isLikelyChrome(name)) continue;
+      const priceFromName = nameMatch && isValidPrice(nameMatch[0]) ? nameMatch[0] : undefined;
       let description: string | undefined;
       let priceText: string | undefined = priceFromName;
       // Scan following dd siblings.
@@ -715,11 +760,13 @@ function extractMenuFromDl($: CheerioAPI, pageUrl: string): MenuSection[] {
         const ddText = clean($(nx).text());
         if (!ddText) continue;
         const m = ddText.match(PRICE_RE);
-        if (m && !priceText) priceText = m[0];
+        if (m && !priceText && isValidPrice(m[0])) priceText = m[0];
         const desc = (m ? ddText.replace(m[0], "") : ddText).trim();
         if (desc.length > 5 && !description) description = desc.slice(0, 400);
         i = j;
       }
+      // DL fallback — require at least a price OR a real description to keep noise out.
+      if (!priceText && !description) continue;
       items.push({ name, description, price: priceText, image: undefined });
       void pageUrl;
     }
@@ -732,22 +779,26 @@ function extractMenuFromTables($: CheerioAPI, pageUrl: string): MenuSection[] {
   const sections: MenuSection[] = [];
   $("table").each((_, table) => {
     const $table = $(table);
+    if (isInChromeRegion($table)) return;
     const heading =
       clean($table.find("caption").first().text()) ??
       clean($table.prev("h1, h2, h3, h4").text()) ??
       "Menu";
+    if (isLikelyChrome(heading)) return;
     const items: MenuItem[] = [];
     $table.find("tr").each((_, tr) => {
       const $tr = $(tr);
       const cells = $tr.find("td").toArray().map((c) => clean($(c).text()) ?? "");
       if (cells.length < 2) return;
-      // Find the price cell (any cell matching PRICE_RE); name = longest non-price cell.
-      const priceCellIdx = cells.findIndex((c) => PRICE_RE.test(c));
+      const priceCellIdx = cells.findIndex((c) => {
+        const m = c.match(PRICE_RE);
+        return m && isValidPrice(m[0]);
+      });
       if (priceCellIdx < 0) return;
       const priceMatch = cells[priceCellIdx].match(PRICE_RE);
       const nameCandidates = cells.filter((_, i) => i !== priceCellIdx);
       const name = nameCandidates
-        .filter((c) => c && c.length >= 2 && c.length <= 100)
+        .filter((c) => c && c.length >= 2 && c.length <= 100 && !isLikelyChrome(c))
         .sort((a, b) => b.length - a.length)[0];
       if (!name) return;
       const description = nameCandidates
@@ -772,16 +823,18 @@ function extractFlatPricedItems($: CheerioAPI, pageUrl: string): MenuItem[] {
   $("li, p, article, .menu-item, [class*='menu']").each((_, el) => {
     const $el = $(el);
     if ($el.children("li, article").length > 0) return;
+    if (isInChromeRegion($el)) return;
     const text = clean($el.text());
     if (!text || text.length > 400) return;
     const m = text.match(PRICE_RE);
-    if (!m) return;
+    if (!m || !isValidPrice(m[0])) return;
     const name = text
       .replace(m[0], "")
       .split("\n")[0]
       .trim()
       .slice(0, 100);
     if (name.length < 2) return;
+    if (isLikelyChrome(name)) return;
     items.push({ name, price: m[0] });
     void pageUrl;
   });
