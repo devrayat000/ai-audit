@@ -155,7 +155,7 @@ const SYSTEM = [
   "- Reviews and press mentions MUST be real quotes from real platforms. NEVER fabricate.",
   "- Awards must include the official source (Michelin Guide, World's 50 Best, etc.) and year.",
   "- ALL OUTPUT MUST BE IN ENGLISH. No foreign-script characters anywhere. Translate or romanize any non-English term in the input or search results before quoting it. Romanize proper nouns when they appear in foreign script.",
-  "- Output MUST be strictly valid RFC 8259 JSON. No trailing commas. No comments. No unquoted keys. Escape every literal \" inside a string as \\\". Never break a string across raw newlines — use \\n inside the string.",
+  '- Output MUST be strictly valid RFC 8259 JSON. No trailing commas. No comments. No unquoted keys. Escape every literal " inside a string as \\". Never break a string across raw newlines — use \\n inside the string.',
   "",
   "Output a SINGLE JSON object with this exact shape (no markdown fences, no prose, no <thinking>):",
   "{",
@@ -274,7 +274,11 @@ function safeNumber(v: unknown, min: number, max: number): number | undefined {
   return n;
 }
 
-function safeStringArray(v: unknown, maxLen: number, maxItem: number): string[] | undefined {
+function safeStringArray(
+  v: unknown,
+  maxLen: number,
+  maxItem: number,
+): string[] | undefined {
   if (!Array.isArray(v)) return undefined;
   const out = v
     .map((x) => safeString(x, maxItem))
@@ -323,7 +327,9 @@ function parseRatingSummary(
   return { score, count: Math.round(count), platforms };
 }
 
-function parseWebFacts(raw: RawWebFacts | null | undefined): WebFacts | undefined {
+function parseWebFacts(
+  raw: RawWebFacts | null | undefined,
+): WebFacts | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const wf: WebFacts = {
     transit: safeString(raw.transit, 200),
@@ -363,7 +369,6 @@ function parseSignatureDishes(
   return out.length > 0 ? out.slice(0, 8) : undefined;
 }
 
-
 function parseDiscoveredSocial(
   raw: RawSocial | null | undefined,
 ): Partial<SocialLinks> | undefined {
@@ -379,18 +384,6 @@ function parseDiscoveredSocial(
   const hasAny = Object.values(out).some((v) => v !== undefined);
   return hasAny ? out : undefined;
 }
-
-interface WebSearchTool {
-  type: string;
-  name: string;
-  max_uses?: number;
-}
-
-const WEB_SEARCH_TOOL: WebSearchTool = {
-  name: "web_search",
-  type: "web_search_20260209",
-  max_uses: 5,
-};
 
 export async function enrichWithAudit(
   site: PublishedSite,
@@ -422,9 +415,7 @@ export async function enrichWithAudit(
           text: SYSTEM,
         },
       ],
-      tools: [WEB_SEARCH_TOOL] as unknown as Parameters<
-        typeof claude.messages.create
-      >[0]["tools"],
+      tools: [{ name: "web_search", type: "web_search_20260209", max_uses: 5 }],
       messages: [{ role: "user", content: prompt }],
     });
 
@@ -451,7 +442,9 @@ export async function enrichWithAudit(
     const atmosphereTags = safeStringArray(parsed.atmosphereTags, 8, 24);
     const discoveredCuisine = safeStringArray(parsed.discoveredCuisine, 6, 40);
     const discoveredPriceRange = safeString(parsed.discoveredPriceRange, 8);
-    const discoveredSocial = parseDiscoveredSocial(parsed.discoveredSocial ?? null);
+    const discoveredSocial = parseDiscoveredSocial(
+      parsed.discoveredSocial ?? null,
+    );
 
     const enrichment: GeoEnrichment = {
       summary: safeString(parsed.summary, 600),
@@ -486,7 +479,9 @@ export async function enrichWithAudit(
     const counts = {
       reviews: reviews?.length ?? 0,
       signatureDishes: signatureDishes?.length ?? 0,
-      webFactKeys: webFacts ? Object.values(webFacts).filter((v) => v !== undefined).length : 0,
+      webFactKeys: webFacts
+        ? Object.values(webFacts).filter((v) => v !== undefined).length
+        : 0,
       atmosphereTags: atmosphereTags?.length ?? 0,
     };
     notes.push(`web_search enrichment counts: ${JSON.stringify(counts)}`);
@@ -519,10 +514,7 @@ export function applyEnrichment(
     next.meta = { ...next.meta, description: enrichment.meta.description };
   }
 
-  if (
-    next.data.industry === "restaurant" ||
-    next.data.industry === "general"
-  ) {
+  if (next.data.industry === "restaurant" || next.data.industry === "general") {
     const data = { ...next.data };
 
     if (enrichment.hero) {

@@ -229,25 +229,17 @@ async function persistStep(
     meta: { blobUrl: url ?? "" },
   });
 
-  const writable = getWritable<string>();
-  const writer = writable.getWriter();
-  try {
-    await writeStreamChunk(writer, {
-      state: "completed",
-      message: `Published at ${plannedUrl}`,
-      progress: 100,
-      result: site,
-      plannedUrl,
-    } satisfies PublishEvent);
-    await writer.write("data: [DONE]\n\n");
-    await writer.close();
-  } finally {
-    try {
-      writer.releaseLock();
-    } catch {
-      /* writer already closed */
-    }
-  }
+  await emit({
+    state: "completed",
+    message: `Published at ${plannedUrl}`,
+    progress: 100,
+    result: site,
+    plannedUrl,
+  });
+
+  // Close the stream so the client reader unblocks immediately rather than
+  // waiting for the workflow's auto-close.
+  await closeStream();
   return site;
 }
 
@@ -258,38 +250,32 @@ async function markPublishFailed(runId: string, message: string): Promise<void> 
     error: message,
     message: `Publish failed: ${message}`,
   });
-  const writable = getWritable<string>();
-  const writer = writable.getWriter();
-  try {
-    await writeStreamChunk(writer, {
-      state: "failed",
-      message: `Publish failed: ${message}`,
-      error: message,
-    } satisfies PublishEvent);
-    await writer.write("data: [DONE]\n\n");
-    await writer.close();
-  } finally {
-    try {
-      writer.releaseLock();
-    } catch {
-      /* writer already closed */
-    }
-  }
+  await emit({
+    state: "failed",
+    message: `Publish failed: ${message}`,
+    error: message,
+  });
+  await closeStream();
 }
 
 async function emit(payload: PublishEvent): Promise<void> {
   const writable = getWritable<string>();
   const writer = writable.getWriter();
   try {
-    await writeStreamChunk(writer, payload);
+    await writer.write(`data: ${JSON.stringify(payload)}\n\n`);
   } finally {
-    writer.releaseLock();
+    try {
+      writer.releaseLock();
+    } catch {
+      /* already released */
+    }
   }
 }
 
-async function writeStreamChunk<T>(
-  writer: WritableStreamDefaultWriter<string>,
-  payload: T,
-): Promise<void> {
-  await writer.write(`data: ${JSON.stringify(payload)}\n\n`);
+async function closeStream(): Promise<void> {
+  try {
+    await getWritable<string>().close();
+  } catch {
+    // Stream may already be closed by the workflow runtime — safe to ignore.
+  }
 }

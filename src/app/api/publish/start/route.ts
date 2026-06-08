@@ -142,6 +142,10 @@ export async function POST(req: NextRequest) {
         "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
+        // Defeat proxy/edge buffering so progress events flush in real time
+        // instead of arriving in one burst at the end of the stream.
+        "X-Accel-Buffering": "no",
+        "Content-Encoding": "identity",
         "X-Run-Id": runId,
         "X-Subdomain": subdomain,
       },
