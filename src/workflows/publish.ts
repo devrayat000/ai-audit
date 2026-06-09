@@ -1,4 +1,4 @@
-import { getWritable } from "workflow";
+import { getWritable, createHook } from "workflow";
 import {
   buildInitialStatus,
   patchRunStatus,
@@ -6,9 +6,9 @@ import {
 } from "@/lib/workflow/status-store";
 import { buildPublishedSite, type PublishInput } from "@/lib/sites/publish";
 import { writePublishedSite } from "@/lib/sites/storage";
-import { applyEnrichment, enrichWithAudit } from "@/lib/sites/ai-enrich";
+import { applyEnrichment, enrichWithAudit, generateQuestionsForMissingFields } from "@/lib/sites/ai-enrich";
 import { translateSiteToEnglish } from "@/lib/sites/translator";
-import type { PublishedSite } from "@/lib/sites/types";
+import type { PublishedSite, RestaurantData } from "@/lib/sites/types";
 import type { AuditReport } from "@/lib/types";
 
 export interface PublishWorkflowInput extends PublishInput {
@@ -41,7 +41,8 @@ export async function publishSiteWorkflow(
   await initPublishRun(runId, input);
   try {
     const scraped = await scrapeStep(runId, input);
-    const translated = await translateStep(runId, scraped);
+    const customized = await userCustomizationStep(runId, scraped);
+    const translated = await translateStep(runId, customized);
     const enriched = await enrichStep(runId, translated, input.audit);
     return await persistStep(runId, enriched);
   } catch (err) {
@@ -114,6 +115,82 @@ async function scrapeStep(
     meta,
   });
   return site;
+}
+
+async function userCustomizationStep(
+  runId: string,
+  site: PublishedSite,
+): Promise<PublishedSite> {
+  "use step";
+
+  const questions = await generateQuestionsForMissingFields(site);
+  if (questions.length === 0) {
+    return site;
+  }
+
+  // Save the questions to state so the frontend knows we are waiting for input
+  await patchRunStatus<PublishedSite>("publish", runId, {
+    state: "waiting_for_input",
+    message: "Waiting for user customization inputs...",
+    progress: 58,
+    meta: { questions },
+  });
+
+  await emit({
+    state: "waiting_for_input",
+    message: "Waiting for user customization inputs...",
+    progress: 58,
+    meta: { questions },
+  });
+
+  // Suspend workflow run using a dynamic hook
+  const hook = createHook<Record<string, string>>({ token: `customize:${runId}` });
+  const answers = await hook;
+
+  // Set running state again
+  await patchRunStatus<PublishedSite>("publish", runId, {
+    state: "running",
+    message: "Customization answers received. Merging...",
+    progress: 60,
+  });
+
+  await emit({
+    state: "running",
+    message: "Customization answers received. Merging...",
+    progress: 60,
+  });
+
+  // Merge the answers back into the scraped site object
+  const merged = { ...site };
+  const d = { ...merged.data };
+
+  if (answers.street) {
+    d.contact = { ...d.contact, street: answers.street };
+  }
+  if (answers.city) {
+    d.contact = { ...d.contact, city: answers.city };
+  }
+  if (answers.phone) {
+    d.contact = { ...d.contact, phone: answers.phone };
+  }
+  if (answers.description) {
+    d.description = answers.description;
+  }
+  if (answers.highlights) {
+    d.highlights = answers.highlights.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  if (d.industry === "restaurant") {
+    const r = d as RestaurantData;
+    if (answers.cuisine) {
+      r.cuisine = answers.cuisine.split(",").map((s) => s.trim()).filter(Boolean);
+    }
+    if (answers.hours) {
+      r.description = `${r.description || ""}\nOpening Hours: ${answers.hours}`.trim();
+    }
+  }
+
+  merged.data = d;
+  return merged;
 }
 
 async function translateStep(

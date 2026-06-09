@@ -554,3 +554,84 @@ export function applyEnrichment(
   }
   return next;
 }
+
+export interface CustomQuestion {
+  key: string;
+  label: string;
+  question: string;
+  placeholder?: string;
+  type: "text" | "tel" | "textarea" | "checkbox-group";
+  options?: string[];
+}
+
+export async function generateQuestionsForMissingFields(
+  site: PublishedSite
+): Promise<CustomQuestion[]> {
+  const claude = getClient();
+  if (!claude) return [];
+
+  const d = site.data;
+  const isRestaurant = d.industry === "restaurant";
+
+  const scrapedInfo = {
+    name: d.name,
+    description: d.description || null,
+    about: d.about || null,
+    phone: d.contact?.phone || null,
+    street: d.contact?.street || null,
+    city: d.contact?.city || null,
+    hours: isRestaurant ? (d as RestaurantData).hours || null : null,
+    cuisine: isRestaurant ? (d as RestaurantData).cuisine || null : null,
+    highlights: d.highlights || null,
+  };
+
+  const prompt = `
+Analyze the following scraped business details and identify which of the following essential fields are missing or empty:
+- "street" (street address)
+- "city" (city or region)
+- "phone" (contact phone number)
+- "description" (brief description of the business)
+- "highlights" (what makes the business special/unique features)
+${isRestaurant ? '- "hours" (opening hours or schedule)\n- "cuisine" (type of cuisine served)' : ""}
+
+Here is the scraped data:
+\`\`\`json
+${JSON.stringify(scrapedInfo, null, 2)}
+\`\`\`
+
+Generate a JSON array of questions for ONLY the missing fields. Do not ask for fields that already have valid values.
+Your output must be a valid JSON array of objects matching this TypeScript shape:
+\`\`\`ts
+interface CustomQuestion {
+  key: "street" | "city" | "phone" | "description" | "hours" | "cuisine" | "highlights";
+  label: string; // short input label, e.g. "Phone number", "Special cuisine"
+  question: string; // friendly user-facing question, e.g. "What is your business phone number?"
+  placeholder?: string; // friendly placeholder value example
+  type: "text" | "tel" | "textarea" | "checkbox-group";
+  options?: string[]; // only if type is "checkbox-group"
+}
+\`\`\`
+
+Return ONLY the JSON array. Do not wrap in markdown code blocks or write any thinking/prose.
+`;
+
+  try {
+    const res = await claude.messages.create({
+      model: "claude-3-5-sonnet-latest",
+      max_tokens: 1500,
+      system: "You are a helpful business onboarding assistant. Output ONLY a valid JSON array.",
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const txt = res.content
+      .map((c) => ("text" in c && typeof c.text === "string" ? c.text : ""))
+      .join("\n")
+      .trim();
+
+    return parseJsonLenient(txt) as CustomQuestion[];
+  } catch (e) {
+    console.error("[ai-enrich] failed to generate questions:", e);
+    return [];
+  }
+}
+

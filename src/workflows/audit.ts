@@ -18,6 +18,7 @@ import type {
 } from "../lib/types";
 import { shortId } from "../lib/utils/url";
 import { getWritable } from "workflow";
+import { writeAuditReport } from "../lib/audit/storage";
 
 export interface RunAuditInput {
   url: string;
@@ -195,6 +196,10 @@ async function compileReportStep(opts: {
     topRecommendations: top,
     errors: opts.errors,
   };
+  
+  // Save to Blob Storage in this Node-capable step
+  await writeAuditReport(report);
+
   await writeStreamChunk(writer, report);
   await writer.write("data: [DONE]\n\n");
   writer.releaseLock();

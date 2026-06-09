@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import type { AuditReport, Industry } from "@/lib/types";
 import type { CrawlEvent } from "@/lib/crawler";
 import { AuditForm } from "./audit-form";
@@ -27,6 +28,7 @@ const INITIAL_PROGRESS: LoadingProgress = {
 };
 
 export function LandingContent() {
+  const router = useRouter();
   const [phase, setPhase] = useState<Phase>({ name: "idle" });
 
   const bumpProgress = (next: LoadingProgress) => {
@@ -93,8 +95,7 @@ export function LandingContent() {
 
       if (finished && report) {
         await reader.cancel();
-        setPhase({ name: "done", report });
-        window.scrollTo({ top: 0, behavior: "smooth" });
+        router.push(`/results/${report.id}`);
         return;
       }
 
@@ -115,8 +116,7 @@ export function LandingContent() {
         });
         return;
       }
-      setPhase({ name: "done", report });
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      router.push(`/results/${report.id}`);
     } catch (e) {
       setPhase({
         name: "error",

@@ -6,7 +6,9 @@ import { NextRequest, NextResponse } from "next/server";
 //   - www.<apex>
 // Anything else with a single subdomain label gets rewritten to /sites/<label>.
 
-const APEX_HOSTS = (process.env.SITE_APEX_HOSTS ?? "shorobik.com,localhost:3000,localhost")
+const APEX_HOSTS = (
+  process.env.SITE_APEX_HOSTS ?? "shorobik.com,localhost:3000,localhost"
+)
   .split(",")
   .map((h) => h.trim().toLowerCase())
   .filter(Boolean);
@@ -44,7 +46,9 @@ export function proxy(req: NextRequest) {
     return NextResponse.next();
   }
   if (
-    /\.(?:png|jpe?g|gif|webp|svg|ico|css|js|map|json|woff2?|ttf|eot|mp4|webm|mp3)$/i.test(path)
+    /\.(?:png|jpe?g|gif|webp|svg|ico|css|js|map|json|woff2?|ttf|eot|mp4|webm|mp3)$/i.test(
+      path,
+    )
   ) {
     return NextResponse.next();
   }

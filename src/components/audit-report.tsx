@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import type { AuditReport } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
@@ -22,7 +23,7 @@ const INDUSTRY_LABEL: Record<string, string> = {
 };
 
 export function AuditReportView({ report }: { report: AuditReport }) {
-  const [publishOpen, setPublishOpen] = useState(false);
+  const router = useRouter();
   return (
     <div className="flex flex-col gap-6">
       <Card>
@@ -97,7 +98,7 @@ export function AuditReportView({ report }: { report: AuditReport }) {
         </Card>
       </div>
 
-      <PublishCta onClick={() => setPublishOpen(true)} />
+      <PublishCta onClick={() => router.push(`/upgrade/${report.id}`)} />
 
       <Card>
         <CardHeader>
@@ -132,12 +133,6 @@ export function AuditReportView({ report }: { report: AuditReport }) {
           </CardContent>
         </Card>
       )}
-
-      <PublishWizard
-        report={report}
-        open={publishOpen}
-        onClose={() => setPublishOpen(false)}
-      />
     </div>
   );
 }

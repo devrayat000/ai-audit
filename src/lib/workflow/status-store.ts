@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { blob, blobToken, isBlobConfigured } from "../storage/blob";
 
 export type RunKind = "regen" | "deploy" | "publish";
-export type RunState = "queued" | "running" | "completed" | "failed";
+export type RunState = "queued" | "running" | "completed" | "failed" | "waiting_for_input";
 
 export interface RunStatus<T = unknown> {
   runId: string;
