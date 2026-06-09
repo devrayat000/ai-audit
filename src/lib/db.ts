@@ -1,6 +1,6 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import * as schema from "./db-schema";
+import * as schema from "./auth-schema";
 
 const globalForDb = globalThis as unknown as {
   conn: Pool | undefined;
@@ -10,7 +10,7 @@ const databaseUrl = process.env.DATABASE_URL;
 
 if (!databaseUrl) {
   console.warn(
-    "[db] DATABASE_URL is not configured. Database operations will fail."
+    "[db] DATABASE_URL is not configured. Database operations will fail.",
   );
 }
 
