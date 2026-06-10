@@ -617,7 +617,7 @@ Return ONLY the JSON array. Do not wrap in markdown code blocks or write any thi
 
   try {
     const res = await claude.messages.create({
-      model: "claude-3-5-sonnet-latest",
+      model: "claude-sonnet-4-6",
       max_tokens: 1500,
       system: "You are a helpful business onboarding assistant. Output ONLY a valid JSON array.",
       messages: [{ role: "user", content: prompt }],

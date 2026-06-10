@@ -17,7 +17,7 @@ export interface PublishWorkflowInput extends PublishInput {
 }
 
 interface PublishEvent {
-  state: "running" | "completed" | "failed";
+  state: "running" | "waiting_for_input" | "completed" | "failed";
   message: string;
   progress?: number;
   result?: PublishedSite;
@@ -44,10 +44,13 @@ export async function publishSiteWorkflow(
     const customized = await userCustomizationStep(runId, scraped);
     const translated = await translateStep(runId, customized);
     const enriched = await enrichStep(runId, translated, input.audit);
-    return await persistStep(runId, enriched);
+    const result = await persistStep(runId, enriched);
+    await closeStreamStep();
+    return result;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await markPublishFailed(runId, message);
+    await closeStreamStep();
     throw err;
   }
 }
@@ -314,9 +317,6 @@ async function persistStep(
     plannedUrl,
   });
 
-  // Close the stream so the client reader unblocks immediately rather than
-  // waiting for the workflow's auto-close.
-  await closeStream();
   return site;
 }
 
@@ -332,7 +332,6 @@ async function markPublishFailed(runId: string, message: string): Promise<void> 
     message: `Publish failed: ${message}`,
     error: message,
   });
-  await closeStream();
 }
 
 async function emit(payload: PublishEvent): Promise<void> {
@@ -349,7 +348,15 @@ async function emit(payload: PublishEvent): Promise<void> {
   }
 }
 
-async function closeStream(): Promise<void> {
+/**
+ * Closes the default writable in its own step, run after the final `emit`.
+ * Buffered chunk writes flush at the step boundary, so the stream's
+ * `X-Stream-Done` is only sent once the last chunk has landed — avoids the
+ * HTTP 409 "stream is completing, cannot write new chunks" race that crashes
+ * the run when write + close share a step.
+ */
+async function closeStreamStep(): Promise<void> {
+  "use step";
   try {
     await getWritable<string>().close();
   } catch {
