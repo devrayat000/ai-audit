@@ -6,7 +6,7 @@ import {
 } from "@/lib/workflow/status-store";
 import { buildPublishedSite, type PublishInput } from "@/lib/sites/publish";
 import { writePublishedSite } from "@/lib/sites/storage";
-import { applyEnrichment, enrichWithAudit, generateQuestionsForMissingFields } from "@/lib/sites/ai-enrich";
+import { applyEnrichment, enrichWithAudit, generateQuestionsForMissingFields, type CustomQuestion } from "@/lib/sites/ai-enrich";
 import { translateSiteToEnglish } from "@/lib/sites/translator";
 import type { PublishedSite, RestaurantData } from "@/lib/sites/types";
 import type { AuditReport } from "@/lib/types";
@@ -41,7 +41,20 @@ export async function publishSiteWorkflow(
   await initPublishRun(runId, input);
   try {
     const scraped = await scrapeStep(runId, input);
-    const customized = await userCustomizationStep(runId, scraped);
+
+    // Ask the user for missing fields. `createHook()` must run in the workflow
+    // body (not a step), so question generation, the suspend, and the merge are
+    // three separate steps bridged by the hook await here.
+    const questions = await customizationQuestionsStep(runId, scraped);
+    let customized = scraped;
+    if (questions.length > 0) {
+      using hook = createHook<Record<string, string>>({
+        token: `customize:${runId}`,
+      });
+      const answers = await hook;
+      customized = await applyCustomizationStep(runId, scraped, answers);
+    }
+
     const translated = await translateStep(runId, customized);
     const enriched = await enrichStep(runId, translated, input.audit);
     const result = await persistStep(runId, enriched);
@@ -120,15 +133,15 @@ async function scrapeStep(
   return site;
 }
 
-async function userCustomizationStep(
+async function customizationQuestionsStep(
   runId: string,
   site: PublishedSite,
-): Promise<PublishedSite> {
+): Promise<CustomQuestion[]> {
   "use step";
 
   const questions = await generateQuestionsForMissingFields(site);
   if (questions.length === 0) {
-    return site;
+    return [];
   }
 
   // Save the questions to state so the frontend knows we are waiting for input
@@ -146,9 +159,15 @@ async function userCustomizationStep(
     meta: { questions },
   });
 
-  // Suspend workflow run using a dynamic hook
-  const hook = createHook<Record<string, string>>({ token: `customize:${runId}` });
-  const answers = await hook;
+  return questions;
+}
+
+async function applyCustomizationStep(
+  runId: string,
+  site: PublishedSite,
+  answers: Record<string, string>,
+): Promise<PublishedSite> {
+  "use step";
 
   // Set running state again
   await patchRunStatus<PublishedSite>("publish", runId, {
