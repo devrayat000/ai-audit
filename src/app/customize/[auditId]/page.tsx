@@ -151,11 +151,18 @@ export default function CustomizePage(props: PageProps) {
           continue;
         }
 
-        if (ev.state === "waiting_for_input" && ev.meta?.questions) {
-          setQuestions(ev.meta.questions);
-          setRunning(false);
-          setProgress(null);
-          return; // Pause streaming client side
+        if (ev.state === "waiting_for_input") {
+          const qs = ev.meta?.questions;
+          if (Array.isArray(qs) && qs.length > 0) {
+            setQuestions(qs);
+            setRunning(false);
+            setProgress(null);
+            return; // Pause streaming client side
+          }
+          // Malformed/empty questions: the workflow skips the customization
+          // hook and keeps running, so keep consuming the stream instead of
+          // stranding the user on a dead screen.
+          continue;
         }
 
         if (ev.message || typeof ev.progress === "number") {
@@ -201,11 +208,9 @@ export default function CustomizePage(props: PageProps) {
         return;
       }
 
-      // Re-establish SSE hook/status read stream
-      const statusRes = await fetch(`/api/publish/health?runId=${runId}`); // wait, let's poll or start status watch
-      // Instead of manual status fetch, we can directly route them to the templates page as the hook resumption will continue to finish the workflow
+      // The hook resumption continues the workflow in the background.
       router.push(`/templates/${auditId}?subdomain=${subdomain}&runId=${runId}`);
-    } catch (e) {
+    } catch {
       setError("Failed to submit answers.");
       setRunning(false);
     }

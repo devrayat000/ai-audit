@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 const schema = z.object({
   runId: z.string(),
-  answers: z.record(z.string()),
+  answers: z.record(z.string(), z.string()),
 });
 
 export async function POST(req: NextRequest) {

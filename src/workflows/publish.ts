@@ -140,7 +140,7 @@ async function customizationQuestionsStep(
   "use step";
 
   const questions = await generateQuestionsForMissingFields(site);
-  if (questions.length === 0) {
+  if (!Array.isArray(questions) || questions.length === 0) {
     return [];
   }
 

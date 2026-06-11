@@ -628,10 +628,52 @@ Return ONLY the JSON array. Do not wrap in markdown code blocks or write any thi
       .join("\n")
       .trim();
 
-    return parseJsonLenient(txt) as CustomQuestion[];
+    return sanitizeQuestions(parseJsonLenient(txt));
   } catch (e) {
     console.error("[ai-enrich] failed to generate questions:", e);
     return [];
   }
+}
+
+const QUESTION_KEYS = new Set([
+  "street",
+  "city",
+  "phone",
+  "description",
+  "hours",
+  "cuisine",
+  "highlights",
+]);
+const QUESTION_TYPES = new Set(["text", "tel", "textarea", "checkbox-group"]);
+
+/**
+ * Claude sometimes returns a single question object (or junk) instead of the
+ * requested array. The publish workflow and the customize page both branch on
+ * `questions.length`, so anything non-array here silently wedges the publish
+ * UI — always return a real, validated array.
+ */
+function sanitizeQuestions(parsed: unknown): CustomQuestion[] {
+  const list = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+  const out: CustomQuestion[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    const q = item as Record<string, unknown>;
+    if (typeof q.key !== "string" || !QUESTION_KEYS.has(q.key)) continue;
+    if (typeof q.label !== "string" || typeof q.question !== "string") continue;
+    out.push({
+      key: q.key as CustomQuestion["key"],
+      label: q.label,
+      question: q.question,
+      placeholder: typeof q.placeholder === "string" ? q.placeholder : undefined,
+      type:
+        typeof q.type === "string" && QUESTION_TYPES.has(q.type)
+          ? (q.type as CustomQuestion["type"])
+          : "text",
+      options: Array.isArray(q.options)
+        ? q.options.filter((o): o is string => typeof o === "string")
+        : undefined,
+    });
+  }
+  return out;
 }
 

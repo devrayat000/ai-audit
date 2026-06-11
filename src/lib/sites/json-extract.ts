@@ -28,10 +28,11 @@ export function extractJsonObject(text: string): string {
       inString = true;
       continue;
     }
-    if (ch === "{") {
+    if (ch === "{" || ch === "[") {
       if (depth === 0) start = i;
       depth++;
-    } else if (ch === "}") {
+    } else if (ch === "}" || ch === "]") {
+      if (depth === 0) continue;
       depth--;
       if (depth === 0 && start >= 0) return stripped.slice(start, i + 1);
     }
